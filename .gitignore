@@ -1,0 +1,81 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### IntelliJ IDEA ###
+.idea/modules.xml
+.idea/jarRepositories.xml
+.idea/compiler.xml
+.idea/libraries/
+.idea/CopilotChatHistory.xml
+.idea/CopilotChatTabs.xml
+*.iws
+*.iml
+*.ipr
+.idea/*
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Local assistant state ###
+.claude/
+.codex-tmp/
+
+### Mac OS ###
+.DS_Store
+
+### Application Logs ###
+*.log
+app.log
+logs/
+
+### Upload Files ###
+uploads/
+
+### WavePilot runtime artifacts ###
+/artifacts/
+/smoke-artifacts/
+/smoke-output/
+/data/wavepilot/jobs/
+
+### User-supplied local algorithm archives ###
+/wavepilot_simple_polar_algorithm.zip
+
+### Local secrets and machine-specific configuration ###
+.env
+.env.*
+!.env.example
+**/application-local.yml
+**/application-secret.yml
+**/application-*.local.yml
+
+### Temp Scripts ###
+*.sh
+!start-full.sh
+*.py
+
+### docker
+/volumes
+/server.pid
+
+### WavePilot runtime template registry ###
+/data/wavepilot/templates/

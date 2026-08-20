@@ -1,0 +1,12 @@
+{
+  "experimentType": "POLAR_CODE_K_IDENTIFICATION",
+  "codeLengths": [32, 64],
+  "errorRateStart": 0.0,
+  "errorRateEnd": 0.02,
+  "errorRateStep": 0.01,
+  "sampleCount": 20,
+  "monteCarloTimes": 10,
+  "randomSeed": 20,
+  "outputTypes": ["ACCURACY_CSV", "RUN_LOG"],
+  "description": "GitHub reproducible showcase"
+}

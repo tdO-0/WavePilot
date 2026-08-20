@@ -1,0 +1,22 @@
+# 构建上下文排除：不把本地数据/产物/仓库历史送进 Docker 构建
+target/
+.git/
+.gitignore
+.idea/
+.vscode/
+*.iml
+*.log
+logs/
+uploads/
+artifacts/
+smoke-artifacts/
+smoke-output/
+volumes/
+data/wavepilot/templates/
+.env
+.env.*
+*.sh
+*.md
+Dockerfile
+docker-compose.yml
+vector-database.yml

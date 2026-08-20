@@ -1,0 +1,23 @@
+name: Java 17 CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DASHSCOPE_API_KEY: not-configured
+      WAVEPILOT_KNOWLEDGE_REPOSITORY: memory
+      WAVEPILOT_EMBEDDING_OFFLINE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Run offline unit and contract tests
+        run: mvn -B clean test

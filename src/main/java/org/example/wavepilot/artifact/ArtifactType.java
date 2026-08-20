@@ -1,0 +1,17 @@
+package org.example.wavepilot.artifact;
+
+public enum ArtifactType {
+    EXPERIMENT_SPEC,
+    EXPERIMENT_PLAN,
+    ACCURACY_CSV,
+    ACCURACY_CURVE,
+    MAT_RESULT,
+    RUN_LOG,
+    SUMMARY_JSON,
+    FINAL_REPORT,
+    REPLAY_MANIFEST,
+    REPLAY_COMPARISON,
+    EVAL_REPORT,
+    EVAL_CASE_RESULTS,
+    EVAL_COMPARISON
+}

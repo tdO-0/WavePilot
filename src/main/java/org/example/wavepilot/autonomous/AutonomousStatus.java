@@ -1,0 +1,25 @@
+package org.example.wavepilot.autonomous;
+
+/** Lifecycle of one autonomous session; WAITING_* states require a human action. */
+public enum AutonomousStatus {
+    UNDERSTANDING_INTENT,
+    WAITING_CLARIFICATION,
+    RESOLVING_TEMPLATE,
+    WAITING_TEMPLATE_SELECTION,
+    COLLECTING_PARAMETERS,
+    WAITING_PARAMS,
+    VALIDATING_SPEC,
+    CHECKING_TEMPLATE,
+    GENERATING_CANDIDATE,
+    VALIDATING,
+    SMOKING,
+    WAITING_APPROVAL,
+    RUNNING_EXPERIMENT,
+    VALIDATING_RESULT,
+    ANALYZING_RESULT,
+    GENERATING_REPORT,
+    SUCCEEDED,
+    FAILED,
+    CANCELLED,
+    BLOCKED
+}

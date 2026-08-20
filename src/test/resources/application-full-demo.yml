@@ -1,0 +1,27 @@
+# Full demo profile: requires real Milvus, a DashScope API key and local MATLAB.
+# It is never part of the default test run; run it only on a fully provisioned host.
+wavepilot:
+  enabled: true
+  runner:
+    type: local-matlab
+    local-matlab:
+      executable: "${MATLAB_EXECUTABLE:matlab}"
+      template: polar-k-identification-simple-v1
+      timeout: 10m
+      poll-interval: 200ms
+      shutdown-grace: 5s
+  artifacts:
+    root: smoke-artifacts/full-demo
+  knowledge:
+    repository: milvus
+    collection: wavepilot_knowledge_v1
+
+milvus:
+  host: ${MILVUS_HOST:localhost}
+  port: ${MILVUS_PORT:19530}
+  timeout: 10000
+
+spring:
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}

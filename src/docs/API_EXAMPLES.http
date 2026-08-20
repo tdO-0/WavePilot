@@ -1,0 +1,183 @@
+@baseUrl = http://localhost:9900
+
+### Parse a complete natural-language spec (requires DashScope)
+POST {{baseUrl}}/api/wavepilot/spec/parse
+Content-Type: application/json
+
+{
+  "message": "使用码长32、64、128和256，误码率从0到0.2，步长0.01，每组500帧，运行1000次蒙特卡洛实验"
+}
+
+### Parse an incomplete spec; expected NEEDS_CLARIFICATION
+POST {{baseUrl}}/api/wavepilot/spec/parse
+Content-Type: application/json
+
+{
+  "message": "帮我做极化码实验"
+}
+
+### Upload theory knowledge
+POST {{baseUrl}}/api/wavepilot/knowledge/upload
+Content-Type: multipart/form-data; boundary=WavePilotBoundary
+
+--WavePilotBoundary
+Content-Disposition: form-data; name="documentType"
+
+THEORY
+--WavePilotBoundary
+Content-Disposition: form-data; name="experimentType"
+
+POLAR_CODE_K_IDENTIFICATION
+--WavePilotBoundary
+Content-Disposition: form-data; name="title"
+
+极化码码维数识别原理
+--WavePilotBoundary
+Content-Disposition: form-data; name="source"
+
+sample://polar-theory
+--WavePilotBoundary
+Content-Disposition: form-data; name="version"
+
+v1
+--WavePilotBoundary
+Content-Disposition: form-data; name="file"; filename="polar-k-identification-theory.md"
+Content-Type: text/markdown
+
+< ./knowledge-samples/polar-k-identification-theory.md
+--WavePilotBoundary--
+
+### Filter knowledge by type and experiment
+POST {{baseUrl}}/api/wavepilot/knowledge/search
+Content-Type: application/json
+
+{
+  "query": "不同码长下如何进行码维数识别实验",
+  "topK": 5,
+  "documentType": "EXPERIMENT_RECIPE",
+  "experimentType": "POLAR_CODE_K_IDENTIFICATION"
+}
+
+### THEORY-only search
+POST {{baseUrl}}/api/wavepilot/knowledge/search
+Content-Type: application/json
+
+{
+  "query": "极化码码维数识别的基础原理",
+  "topK": 5,
+  "documentType": "THEORY"
+}
+
+### POLAR_CODE_K_IDENTIFICATION-only search
+POST {{baseUrl}}/api/wavepilot/knowledge/search
+Content-Type: application/json
+
+{
+  "query": "蒙特卡洛参数和实验失败原因",
+  "topK": 5,
+  "experimentType": "POLAR_CODE_K_IDENTIFICATION"
+}
+
+### ReactAgent chat (requires DashScope; current runner is Mock)
+POST {{baseUrl}}/api/wavepilot/chat
+Content-Type: application/json
+
+{
+  "sessionId": "demo-001",
+  "message": "检索极化码实验模板，然后按码长32和64、误码率0到0.02、步长0.01、每组20帧、10次蒙特卡洛生成并提交实验"
+}
+
+### Chat SSE
+GET {{baseUrl}}/api/wavepilot/chat/stream?sessionId=demo-001&message=查询刚才实验的状态
+Accept: text/event-stream
+
+### Phase 2 structured endpoint remains available
+POST {{baseUrl}}/api/experiments
+Content-Type: application/json
+
+{
+  "experimentType": "POLAR_CODE_K_IDENTIFICATION",
+  "codeLengths": [32, 64],
+  "errorRateStart": 0.0,
+  "errorRateEnd": 0.02,
+  "errorRateStep": 0.01,
+  "sampleCount": 20,
+  "monteCarloTimes": 10,
+  "randomSeed": 20,
+  "outputTypes": ["ACCURACY_CSV", "RUN_LOG"],
+  "description": "Phase 2 regression example"
+}
+
+### Generate deterministic report (Job must be SUCCEEDED)
+POST {{baseUrl}}/api/experiments/{{jobId}}/report
+
+### Read generated JSON + Markdown report
+GET {{baseUrl}}/api/experiments/{{jobId}}/report
+
+### Read Java-assembled report data
+GET {{baseUrl}}/api/experiments/{{jobId}}/report/data
+
+### Revalidate all citations against source artifacts
+POST {{baseUrl}}/api/experiments/{{jobId}}/report/validate
+
+### List citations
+GET {{baseUrl}}/api/experiments/{{jobId}}/citations
+
+### Read one citation
+GET {{baseUrl}}/api/citations/{{citationId}}
+
+### Artifact metadata (never returns an absolute local path)
+GET {{baseUrl}}/api/artifacts/{{artifactId}}/metadata
+
+### Verify artifact size and SHA-256
+POST {{baseUrl}}/api/artifacts/{{artifactId}}/verify
+
+### Download through the path-safe registry
+GET {{baseUrl}}/api/artifacts/{{artifactId}}/download
+
+### Start a replay of a SUCCEEDED job (creates an independent replay job)
+POST {{baseUrl}}/api/experiments/{{jobId}}/replay
+Content-Type: application/json
+
+{
+  "note": "reproducibility check"
+}
+
+### List replays
+GET {{baseUrl}}/api/replays
+
+### Read one replay (status, replayJobId, failureReason)
+GET {{baseUrl}}/api/replays/{{replayId}}
+
+### Read the structured comparison result
+GET {{baseUrl}}/api/replays/{{replayId}}/comparison
+
+### Read the replay manifest (fingerprint, seed, template, algorithm axes)
+GET {{baseUrl}}/api/replays/{{replayId}}/manifest
+
+### Run the offline evaluation (default model stub-v1)
+POST {{baseUrl}}/api/evaluations/run
+Content-Type: application/json
+
+{
+  "datasetName": "default",
+  "modelName": "stub-v1"
+}
+
+### List evaluation runs
+GET {{baseUrl}}/api/evaluations
+
+### Read one evaluation run (per-case results and metrics)
+GET {{baseUrl}}/api/evaluations/{{evaluationId}}
+
+### Read the evaluation report
+GET {{baseUrl}}/api/evaluations/{{evaluationId}}/report
+
+### Compare a baseline run with a candidate run on the same dataset
+POST {{baseUrl}}/api/evaluations/compare
+Content-Type: application/json
+
+{
+  "baselineEvaluationId": "EVAL-XXXXXXXXXXXX",
+  "candidateEvaluationId": "EVAL-YYYYYYYYYYYY"
+}

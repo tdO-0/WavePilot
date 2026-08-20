@@ -1,0 +1,16 @@
+# External-eval profile: runs the evaluation Spec cases through the real DashScope-backed
+# ExperimentSpecParser. Requires a real DASHSCOPE_API_KEY; never part of the default run.
+wavepilot:
+  enabled: true
+  evaluation:
+    external-model: true
+  runner:
+    type: mock
+  artifacts:
+    root: smoke-artifacts/external-eval
+  knowledge:
+    repository: memory
+spring:
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}

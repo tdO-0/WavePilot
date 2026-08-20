@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "templateName": "polar-k-identification-simple-v1",
+  "templateVersion": "polar-k-identification-simple-v1",
+  "entryPoint": "run_experiment",
+  "experimentType": "POLAR_CODE_K_IDENTIFICATION",
+  "algorithmName": "polar-bsc-binomial-k-baseline",
+  "algorithmVersion": "1.0.0",
+  "algorithmValidated": false,
+  "classification": "SIMPLIFIED_BASELINE",
+  "errorRateMeaning": "BSC_BIT_FLIP_PROBABILITY",
+  "sampleCountMeaning": "INTERCEPTED_COMPLETE_CODEWORDS_PER_TRIAL",
+  "monteCarloTimesMeaning": "INDEPENDENT_TRIALS_PER_PARAMETER_POINT",
+  "trueKRule": "15N/32",
+  "supportedCodeLengths": [32, 64, 128, 256, 512]
+}

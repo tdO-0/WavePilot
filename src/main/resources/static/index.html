@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light">
+    <title>WavePilot · 通信仿真实验 Agent</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="vendor/marked.min.js"></script>
+</head>
+<body>
+<div class="app-shell">
+    <header class="topbar">
+        <div class="brand-wrap">
+            <button id="sidebarToggle" class="icon-button mobile-only" type="button" aria-label="展开导航">☰</button>
+            <div class="brand-mark">W</div>
+            <div>
+                <div class="brand-name">WavePilot</div>
+                <div class="brand-desc">通信仿真实验 Agent</div>
+            </div>
+        </div>
+        <div class="topbar-status">
+            <div class="status-chip"><span class="status-dot online"></span>Agent Ready</div>
+            <div class="status-chip subtle">安全步骤自动执行 · 关键发布需确认</div>
+            <div id="globalBoundaryBadge" class="boundary-badge boundary-unknown">运行边界：等待任务</div>
+        </div>
+    </header>
+
+    <aside id="appSidebar" class="sidebar">
+        <div class="sidebar-group">
+            <div class="sidebar-label">主要工作区</div>
+            <nav class="nav-list">
+                <button class="nav-item active" type="button" data-page="agent"><span class="nav-glyph">✦</span><span><strong>Agent 工作台</strong><small>从一句话开始</small></span></button>
+                <button class="nav-item" type="button" data-page="runs"><span class="nav-glyph">▤</span><span><strong>实验任务</strong><small>运行与进度</small></span></button>
+                <button class="nav-item" type="button" data-page="templates"><span class="nav-glyph">▦</span><span><strong>模板库</strong><small>正式与候选</small></span></button>
+                <button class="nav-item" type="button" data-page="results"><span class="nav-glyph">◫</span><span><strong>结果与证据</strong><small>Artifact · Report</small></span></button>
+                <button class="nav-item" type="button" data-page="quality"><span class="nav-glyph">↻</span><span><strong>Replay / Eval</strong><small>复现与评测</small></span></button>
+            </nav>
+        </div>
+
+        <div class="sidebar-grow"></div>
+
+        <div class="sidebar-agent-note">
+            <span class="mini-label">AGENT POLICY</span>
+            <strong>默认自动推进安全步骤</strong>
+            <p>查询、校验、Smoke、建任务、读结果可自动执行；模板发布和高风险操作保留人工确认。</p>
+        </div>
+    </aside>
+
+    <main class="main-content">
+        <!-- Agent-first workspace -->
+        <section id="page-agent" class="workspace-page active" data-page-name="agent">
+            <div class="agent-hero">
+                <div>
+                    <span class="eyebrow">AGENT WORKSPACE</span>
+                    <h1>实验目标编排</h1>
+                    <p>描述实验目标，Agent 将自动完成模板检索、参数收集、实验执行与结果分析；仅在需要你确认发布或补充参数时停下。</p>
+                </div>
+                <div class="agent-policy-card">
+                    <span class="policy-dot"></span>
+                    <div><strong>自动编排已开启</strong><small>不需要在“普通 / 自主”之间切换</small></div>
+                </div>
+            </div>
+
+            <div class="agent-command-layout">
+                <section class="panel chat-panel">
+                    <div class="panel-header chat-header">
+                        <div>
+                            <span class="panel-kicker">CONVERSATION</span>
+                            <h2>实验助手</h2>
+                        </div>
+                        <div class="tooling-badges">
+                            <span class="tiny-badge">RAG</span>
+                            <span class="tiny-badge">Tool Calling</span>
+                            <span class="tiny-badge">MATLAB</span>
+                        </div>
+                    </div>
+
+                    <div class="intent-chips">
+                        <button class="intent-chip" type="button" data-prompt="目前系统里有哪些可用模板？分别能做什么？">查看已有模板</button>
+                        <button class="intent-chip" type="button" data-prompt="用已有的极化码 K 识别模板跑一个实验：码长 32 和 64，错误率 0 到 0.02，步长 0.01。缺少参数时直接问我。">直接跑实验</button>
+                        <button class="intent-chip" type="button" data-prompt="帮我新增一个 QPSK 在 AWGN 信道下的 BER 仿真模板。请自动生成候选、校验并执行 Smoke；达到可发布状态时再让我确认。">创建并验证模板</button>
+                        <button class="intent-chip" type="button" data-prompt="帮我重放最近一次成功实验，并生成带来源引用的结果总结。">Replay + 报告</button>
+                    </div>
+
+                    <div id="chatMessages" class="chat-messages">
+                        <div class="chat-welcome">
+                            <div class="welcome-icon">✦</div>
+                            <div>
+                                <strong>你可以直接说目标，不用先找按钮。</strong>
+                                <p>例如：“跑一次 QPSK BER 实验；如果没有模板，就先帮我创建并验证模板。”</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="agentInlineActions" class="agent-inline-actions" aria-live="polite"></div>
+
+                    <div class="chat-composer-wrap">
+                        <textarea id="chatInput" rows="3" maxlength="1600" placeholder="例如：跑一个 QPSK-AWGN BER 实验，Eb/N0 0–10 dB；如果没有模板先创建并验证，能发布时提醒我。"></textarea>
+                        <div class="composer-footer">
+                            <div class="composer-hint">Enter 发送 · Shift+Enter 换行</div>
+                            <button id="chatSendBtn" class="btn btn-primary btn-send" type="button">发送给 Agent</button>
+                        </div>
+                    </div>
+                    <div id="chatNote" class="helper-line">Agent 只通过受控工具操作系统；不会直接执行任意 Shell 或未发布模板。</div>
+                </section>
+
+                <aside class="agent-context-column">
+                    <section class="panel goal-panel">
+                        <div class="panel-header compact">
+                            <div><span class="panel-kicker">CURRENT GOAL</span><h2>当前任务意图</h2></div>
+                            <span id="autonomousStatusLine" class="status-pill neutral">空闲</span>
+                        </div>
+                        <div id="agentGoalSummary" class="goal-summary empty-soft">等待你的下一条指令。</div>
+                        <input id="autonomousRequest" type="hidden" value="">
+                        <input id="autonomousToggle" type="checkbox" checked hidden>
+                        <input id="autonomousAnalyzeToggle" type="checkbox" checked hidden>
+                        <button id="autonomousStartBtn" type="button" hidden>开始</button>
+                        <button id="autonomousCancelBtn" type="button" hidden>取消</button>
+                    </section>
+
+                    <section class="panel activity-panel">
+                        <div class="panel-header compact">
+                            <div><span class="panel-kicker">AGENT ACTIVITY</span><h2>执行轨迹</h2></div>
+                            <span class="tiny-badge muted">可审计</span>
+                        </div>
+                        <div id="autonomousPanel" class="activity-body">
+                            <div id="autonomousTimeline" class="agent-timeline">
+                                <div class="timeline-empty">Agent 的检索、工具调用、校验、执行与报告步骤会显示在这里。</div>
+                            </div>
+                            <div id="autonomousError" class="error-text"></div>
+                        </div>
+                    </section>
+
+                    <section class="panel context-panel">
+                        <div class="panel-header compact"><div><span class="panel-kicker">CONTEXT</span><h2>当前实验上下文</h2></div></div>
+                        <div class="context-grid">
+                            <div><span>实验类型</span><strong id="contextExperimentType">—</strong></div>
+                            <div><span>模板</span><strong id="contextTemplateId">—</strong></div>
+                            <div><span>任务</span><strong id="contextJobId">未选择</strong></div>
+                            <div><span>边界</span><strong id="contextBoundary">等待任务</strong></div>
+                        </div>
+                        <details class="advanced-details">
+                            <summary>高级：ExperimentSpec 与手动控制</summary>
+                            <textarea id="specJson" rows="10" spellcheck="false">{
+  "experimentType": "POLAR_CODE_K_IDENTIFICATION",
+  "codeLengths": [32, 64],
+  "errorRateStart": 0.0,
+  "errorRateEnd": 0.02,
+  "errorRateStep": 0.01,
+  "sampleCount": 20,
+  "monteCarloTimes": 10,
+  "randomSeed": 20,
+  "outputTypes": ["ACCURACY_CSV", "RUN_LOG"],
+  "description": "agent workbench demo"
+}</textarea>
+                            <div class="button-row"><button id="validateSpecBtn" class="btn btn-secondary" type="button">手动校验</button><button id="createJobBtn" class="btn btn-secondary" type="button">手动建任务</button></div>
+                            <div id="specValidationResult" class="inline-feedback"></div>
+                            <div id="planPreview" class="inline-feedback"></div>
+                        </details>
+                    </section>
+
+                    <section class="panel capability-panel">
+                        <div class="panel-header compact"><div><span class="panel-kicker">AUTOMATION</span><h2>Agent 可自动完成</h2></div></div>
+                        <div class="capability-list">
+                            <div><span>✓</span><p><strong>模板检索与解释</strong><small>查现有模板、参数、版本与验证边界</small></p></div>
+                            <div><span>✓</span><p><strong>候选模板生成</strong><small>生成 → 校验 → Smoke → 等待批准</small></p></div>
+                            <div><span>✓</span><p><strong>实验编排</strong><small>补参 → 校验 → 建任务 → 跟踪结果</small></p></div>
+                            <div><span>✓</span><p><strong>结果工作流</strong><small>Artifact → Report → Replay → Eval</small></p></div>
+                        </div>
+                    </section>
+                </aside>
+            </div>
+
+            <details class="panel knowledge-collapsible">
+                <summary><span><strong>通信知识库</strong><small>非日常操作，按需上传理论、标准和实验说明</small></span><span>展开</span></summary>
+                <div class="knowledge-body">
+                    <input type="file" id="knowledgeFile" accept=".txt,.md,.markdown">
+                    <button id="knowledgeUploadBtn" class="btn btn-secondary" type="button">上传文档</button>
+                    <div id="knowledgeUploadResult" class="inline-feedback"></div>
+                </div>
+            </details>
+        </section>
+
+        <!-- Runs -->
+        <section id="page-runs" class="workspace-page" data-page-name="runs">
+            <div class="page-heading">
+                <div><span class="eyebrow">RUN HISTORY</span><h1>实验任务</h1><p>这里主要用于追踪与审计；日常创建任务优先通过 Agent。</p></div>
+                <div class="heading-actions"><button class="btn btn-primary" type="button" data-go-page="agent" data-fill-prompt="帮我创建并运行一个实验。">让 Agent 建实验</button><button id="refreshJobsBtn" class="btn btn-secondary" type="button">刷新</button></div>
+            </div>
+            <div class="two-column wide-left">
+                <section class="panel list-panel"><div class="panel-header"><div><span class="panel-kicker">RUNS</span><h2>运行记录</h2></div></div><div id="jobList" class="data-list"></div></section>
+                <section class="panel sticky-panel">
+                    <div class="panel-header"><div><span class="panel-kicker">SELECTED RUN</span><h2>任务详情</h2></div></div>
+                    <div id="jobStatusLine" class="detail-title">未选择任务</div>
+                    <div class="progress-box"><div class="progress-meta"><span>执行进度</span><strong id="currentPointLine">—</strong></div><div class="progress-track"><div id="progressBar" class="progress-fill" style="width:0%"></div></div><div id="jobStage" class="stage-line"></div></div>
+                    <div id="jobBoundaryBadge" class="boundary-badge boundary-unknown">任务边界：未选择</div>
+                    <div class="button-row"><button id="cancelJobBtn" class="btn btn-danger-soft" type="button">取消任务</button><button class="btn btn-secondary" type="button" data-go-page="results">查看结果</button></div>
+                    <div id="jobError" class="error-text"></div>
+                </section>
+            </div>
+        </section>
+
+        <!-- Templates -->
+        <section id="page-templates" class="workspace-page" data-page-name="templates">
+            <div class="page-heading">
+                <div><span class="eyebrow">TEMPLATE LIBRARY</span><h1>模板库</h1><p>模板库是可复用能力目录；新增模板优先通过 Agent 一句话完成。</p></div>
+                <div class="heading-actions"><button id="openTemplateCreate" class="btn btn-primary" type="button" data-go-page="agent" data-fill-prompt="帮我新增一个通信仿真实验模板。先问我目标，然后自动完成候选生成、校验和 Smoke；可以发布时再让我确认。">让 Agent 新建模板</button></div>
+            </div>
+
+            <div class="template-overview-strip">
+                <div><span class="strip-icon">1</span><p><strong>Candidate</strong><small>Agent 根据实验目标生成候选模板</small></p></div>
+                <span class="strip-arrow">→</span>
+                <div><span class="strip-icon">2</span><p><strong>Validate / Smoke</strong><small>自动完成安全校验与受控试运行</small></p></div>
+                <span class="strip-arrow">→</span>
+                <div><span class="strip-icon">3</span><p><strong>Human Approval</strong><small>正式发布前仅在这里需要确认</small></p></div>
+                <span class="strip-arrow">→</span>
+                <div><span class="strip-icon">4</span><p><strong>ACTIVE</strong><small>发布后可由 Agent 直接选择并复用</small></p></div>
+            </div>
+
+            <div class="tab-row">
+                <button class="tab-button active" type="button" data-template-tab="published">正式模板</button>
+                <button class="tab-button" type="button" data-template-tab="candidates">候选模板</button>
+                <span class="tab-grow"></span>
+                <button id="refreshTemplatesBtn" class="btn btn-ghost btn-small" type="button">刷新正式模板</button>
+                <button id="refreshCandidatesBtn" class="btn btn-ghost btn-small" type="button">刷新候选</button>
+            </div>
+
+            <div class="two-column template-grid">
+                <section class="panel list-panel no-padding">
+                    <div id="templatePublishedPanel" class="template-tab-panel active"><div class="list-caption"><strong>正式模板</strong><span>可直接运行</span></div><div id="templateList" class="data-list template-list"></div></div>
+                    <div id="templateCandidatesPanel" class="template-tab-panel"><div class="list-caption"><strong>候选模板</strong><span>通常由 Agent 自动推进到待审批</span></div><div id="candidateList" class="data-list template-list"></div></div>
+                </section>
+                <section class="panel sticky-panel">
+                    <div class="panel-header"><div><span class="panel-kicker">DETAIL</span><h2>模板详情</h2></div></div>
+                    <div id="templateDetail" class="template-detail empty-soft">选择模板查看参数、输出、版本和验证边界。</div>
+                    <div class="manual-tools">
+                        <div class="manual-tools-title"><strong>人工管理 / 故障处理</strong><small>正常流程优先让 Agent 自动推进</small></div>
+                        <div class="button-row wrap"><button id="validateCandidateBtn" class="btn btn-secondary" type="button">重试校验</button><button id="smokeCandidateBtn" class="btn btn-secondary" type="button">重试 Smoke</button><button id="approveCandidateBtn" class="btn btn-primary" type="button">批准发布</button><button id="rejectCandidateBtn" class="btn btn-danger-soft" type="button">拒绝</button></div>
+                        <div class="button-row wrap"><button id="rollbackTemplateBtn" class="btn btn-secondary" type="button">回滚版本</button><button id="deactivateTemplateBtn" class="btn btn-danger-soft" type="button">停用模板</button></div>
+                    </div>
+                    <div id="templateLibraryError" class="error-text"></div>
+                </section>
+            </div>
+
+            <!-- legacy direct-generation controls retained for compatibility, not primary UX -->
+            <div class="compat-hidden" aria-hidden="true">
+                <textarea id="templateRequestInput"></textarea>
+                <button id="generateCandidateBtn" type="button">生成候选模板</button>
+            </div>
+        </section>
+
+        <!-- Results -->
+        <section id="page-results" class="workspace-page" data-page-name="results">
+            <div class="page-heading">
+                <div><span class="eyebrow">EVIDENCE</span><h1>结果与证据</h1><p>查看 Artifact、实验报告和 Citation；这些内容也可以直接让 Agent 帮你读取和总结。</p></div>
+                <div class="heading-actions"><button class="btn btn-primary" type="button" data-go-page="agent" data-fill-prompt="总结当前实验结果，生成带 Artifact Citation 的报告，并指出科学验证边界。">让 Agent 总结结果</button></div>
+            </div>
+            <div class="result-strip"><div><span>当前任务</span><strong id="resultCurrentJob">未选择</strong></div><div><span>Artifact</span><strong id="resultArtifactCount">—</strong></div><div><span>报告</span><strong id="resultReportState">等待生成</strong></div></div>
+            <div class="tab-row">
+                <button class="tab-button active" type="button" data-result-tab="artifacts">Artifact</button>
+                <button class="tab-button" type="button" data-result-tab="report">实验报告</button>
+                <button class="tab-button" type="button" data-result-tab="citations">Citation</button>
+            </div>
+            <div id="resultArtifactsPanel" class="result-tab-panel active">
+                <div class="two-column wide-left"><section class="panel"><div class="panel-header"><div><span class="panel-kicker">ARTIFACTS</span><h2>实验产物</h2></div></div><div id="artifactList" class="artifact-grid"></div></section><section class="panel sticky-panel"><div class="panel-header"><div><span class="panel-kicker">PREVIEW</span><h2>产物详情</h2></div></div><div class="preview-frame"><img id="pngPreview" alt="实验图像预览" hidden></div><div id="artifactMetadata" class="technical-block empty-soft">选择一个 Artifact 查看元数据。</div></section></div>
+            </div>
+            <div id="resultReportPanel" class="result-tab-panel"><section class="panel report-panel"><div class="panel-header"><div><span class="panel-kicker">REPORT</span><h2>带来源的实验报告</h2></div><div class="button-row no-margin"><button id="generateReportBtn" class="btn btn-primary" type="button">生成 / 刷新报告</button><button id="validateReportBtn" class="btn btn-secondary" type="button">校验引用</button></div></div><article id="reportContent" class="report-content"></article><div id="reportError" class="error-text"></div></section></div>
+            <div id="resultCitationsPanel" class="result-tab-panel"><section class="panel"><div class="panel-header"><div><span class="panel-kicker">CITATIONS</span><h2>结论来源</h2></div></div><div id="citationList" class="citation-list"></div></section></div>
+        </section>
+
+        <!-- Quality -->
+        <section id="page-quality" class="workspace-page" data-page-name="quality">
+            <div class="page-heading">
+                <div><span class="eyebrow">REPRODUCIBILITY & EVAL</span><h1>Replay / Eval</h1><p>这里是质量验证视图；日常也可以直接让 Agent 执行 Replay、解释差异并运行离线评测。</p></div>
+                <div class="heading-actions"><button class="btn btn-primary" type="button" data-go-page="agent" data-fill-prompt="对当前成功实验做 Replay；完成后解释差异，并运行一次离线 Eval。">让 Agent 做质量检查</button></div>
+            </div>
+            <div class="quality-grid">
+                <section class="panel">
+                    <div class="panel-header"><div><span class="panel-kicker">REPLAY</span><h2>实验复现</h2></div><div class="button-row no-margin"><button id="replayBtn" class="btn btn-primary" type="button">Replay 当前任务</button><button id="refreshReplaysBtn" class="btn btn-secondary" type="button">刷新</button></div></div>
+                    <div class="boundary-callout">Replay 一致只说明执行可复现，不代表算法已经经过科学验证。</div>
+                    <div class="two-stack"><div><div class="subheading">复现记录</div><div id="replayList" class="data-list"></div></div><div><div class="subheading">比较结果</div><div id="replayComparison" class="technical-block empty-soft">选择 Replay 记录查看比较结果。</div><div id="replayError" class="error-text"></div></div></div>
+                </section>
+                <section class="panel">
+                    <div class="panel-header"><div><span class="panel-kicker">OFFLINE EVAL</span><h2>Agent 与执行链评测</h2></div><span class="status-pill neutral">STUB MODEL · OFFLINE</span></div>
+                    <div class="button-row"><button id="evalRunBtn" class="btn btn-primary" type="button">运行 stub-v1</button><button id="evalRunRegressedBtn" class="btn btn-secondary" type="button">运行 stub-v2</button><button id="evalCompareBtn" class="btn btn-secondary" type="button">配对比较</button></div>
+                    <div class="subheading">指标</div><div id="evalMetrics" class="technical-block empty-soft">运行 Eval 后显示指标。</div>
+                    <div class="subheading">失败 Case</div><div id="evalFailedCases" class="technical-block empty-soft">暂无数据。</div>
+                    <div class="subheading">Baseline vs Candidate</div><div id="evalComparison" class="technical-block empty-soft">运行两次 Eval 后可以比较。</div>
+                    <div id="evalError" class="error-text"></div>
+                </section>
+            </div>
+        </section>
+    </main>
+</div>
+
+<!-- Inline approval drawer: only high-value human gate. Claude should wire this instead of modal where possible. -->
+<aside id="agentApprovalDrawer" class="approval-drawer" aria-hidden="true">
+    <div class="approval-drawer-head"><div><span class="panel-kicker">HUMAN APPROVAL</span><h2>需要你的确认</h2></div><button id="approvalDrawerClose" class="icon-button" type="button" aria-label="关闭">×</button></div>
+    <div id="autonomousApprovalBody" class="approval-drawer-body"></div>
+    <div id="autonomousApprovalError" class="error-text"></div>
+    <div class="approval-drawer-actions"><button id="autonomousRejectBtn" class="btn btn-danger-soft" type="button">拒绝</button><button id="autonomousApproveBtn" class="btn btn-primary" type="button">批准并继续</button></div>
+</aside>
+
+<!-- Legacy parameter dialog retained only as fallback for complex schemas; normal missing params should be asked inline in chat. -->
+<dialog id="paramFillDialog" class="wp-dialog">
+    <div class="dialog-header"><div><span class="panel-kicker">PARAMETERS</span><div id="paramFillTitle" class="dialog-title">补充实验参数</div></div><button type="button" class="dialog-close" data-close-dialog="paramFillDialog">×</button></div>
+    <div id="paramFillForm" class="dialog-body"></div>
+    <div id="paramFillError" class="error-text dialog-error"></div>
+    <div class="dialog-actions"><button id="paramFillCancelBtn" class="btn btn-secondary" type="button">取消</button><button id="paramFillConfirmBtn" class="btn btn-primary" type="button">提交给 Agent</button></div>
+</dialog>
+
+<!-- Kept only so old code cannot crash before Claude finishes integration. New flow should not show it. -->
+<dialog id="autonomousApprovalDialog" class="compat-hidden"><div></div></dialog>
+
+<div id="toastArea" class="toast-area"></div>
+<script src="app.js?v=1.0.1"></script>
+<script>
+(function () {
+    const $$ = (selector, root) => Array.from((root || document).querySelectorAll(selector));
+
+    function switchPage(page) {
+        $$('.workspace-page').forEach(el => el.classList.toggle('active', el.dataset.pageName === page));
+        $$('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === page));
+        sessionStorage.setItem('wavepilot.activePage', page);
+        if (page === 'results' && window.workbench?.selectedJobId) {
+            window.workbench.loadArtifacts(window.workbench.selectedJobId).then(syncContext);
+        }
+        document.getElementById('appSidebar')?.classList.remove('mobile-open');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function goAgentWithPrompt(prompt) {
+        switchPage('agent');
+        const input = document.getElementById('chatInput');
+        if (input && prompt) {
+            input.value = prompt;
+            input.focus();
+        }
+    }
+
+    function templateTab(name) {
+        $$('[data-template-tab]').forEach(b => b.classList.toggle('active', b.dataset.templateTab === name));
+        document.getElementById('templatePublishedPanel')?.classList.toggle('active', name === 'published');
+        document.getElementById('templateCandidatesPanel')?.classList.toggle('active', name === 'candidates');
+    }
+
+    function resultTab(name) {
+        $$('[data-result-tab]').forEach(b => b.classList.toggle('active', b.dataset.resultTab === name));
+        document.getElementById('resultArtifactsPanel')?.classList.toggle('active', name === 'artifacts');
+        document.getElementById('resultReportPanel')?.classList.toggle('active', name === 'report');
+        document.getElementById('resultCitationsPanel')?.classList.toggle('active', name === 'citations');
+    }
+
+    function syncContext() {
+        const wb = window.workbench;
+        const jobId = wb?.selectedJobId || '未选择';
+        const contextJob = document.getElementById('contextJobId');
+        const resultJob = document.getElementById('resultCurrentJob');
+        if (contextJob) contextJob.textContent = jobId;
+        if (resultJob) resultJob.textContent = jobId;
+        const artifacts = Array.isArray(wb?.artifacts) ? wb.artifacts : [];
+        const count = document.getElementById('resultArtifactCount');
+        if (count) count.textContent = String(artifacts.length || 0);
+        const boundary = document.getElementById('globalBoundaryBadge');
+        const contextBoundary = document.getElementById('contextBoundary');
+        if (boundary && contextBoundary) contextBoundary.textContent = boundary.textContent.replace(/^运行边界：|^边界状态：/, '').trim();
+        try {
+            const raw = document.getElementById('specJson')?.value;
+            if (raw) {
+                const spec = JSON.parse(raw);
+                const type = document.getElementById('contextExperimentType');
+                if (type) type.textContent = spec.experimentType || spec.experimentTypeId || '—';
+            }
+        } catch (_) {}
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        $$('.nav-item').forEach(b => b.addEventListener('click', () => switchPage(b.dataset.page)));
+        $$('[data-go-page]').forEach(b => b.addEventListener('click', () => {
+            const prompt = b.dataset.fillPrompt || '';
+            if (b.dataset.goPage === 'agent' && prompt) goAgentWithPrompt(prompt); else switchPage(b.dataset.goPage);
+        }));
+        $$('.intent-chip').forEach(b => b.addEventListener('click', () => goAgentWithPrompt(b.dataset.prompt || '')));
+        $$('[data-template-tab]').forEach(b => b.addEventListener('click', () => templateTab(b.dataset.templateTab)));
+        $$('[data-result-tab]').forEach(b => b.addEventListener('click', () => resultTab(b.dataset.resultTab)));
+        $$('[data-close-dialog]').forEach(b => b.addEventListener('click', () => document.getElementById(b.dataset.closeDialog)?.close()));
+
+        document.getElementById('sidebarToggle')?.addEventListener('click', () => document.getElementById('appSidebar')?.classList.toggle('mobile-open'));
+        document.getElementById('approvalDrawerClose')?.addEventListener('click', () => {
+            const drawer = document.getElementById('agentApprovalDrawer');
+            if (drawer) { drawer.classList.remove('open'); drawer.setAttribute('aria-hidden', 'true'); }
+        });
+        document.getElementById('chatInput')?.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('chatSendBtn')?.click(); }
+        });
+        document.getElementById('specJson')?.addEventListener('input', syncContext);
+
+        const chat = document.getElementById('chatMessages');
+        if (chat) new MutationObserver(() => {
+            if (chat.querySelector('.chat-msg')) chat.querySelector('.chat-welcome')?.remove();
+        }).observe(chat, { childList: true, subtree: false });
+
+        switchPage(sessionStorage.getItem('wavepilot.activePage') || 'agent');
+        setInterval(syncContext, 1200);
+    });
+})();
+</script>
+</body>
+</html>

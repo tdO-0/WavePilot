@@ -1,0 +1,41 @@
+# WavePilot 一键启动：应用 + Milvus 全栈
+# 用法：docker compose up -d --build  然后打开 http://localhost:9900
+# Milvus 三件套（etcd/minio/standalone）与 UI（attu）复用 vector-database.yml 的定义。
+
+include:
+  - vector-database.yml
+
+services:
+  app:
+    build: .
+    container_name: wavepilot-app
+    depends_on:
+      standalone:
+        condition: service_healthy
+    ports:
+      - "9900:9900"
+    environment:
+      # 真实模型/Embedding：设置 DASHSCOPE_API_KEY 后自动启用（compose 从宿主机环境读取）；
+      # 无 key 时自主模式回退脚本化 Stub，知识库功能不可用（可设
+      # WAVEPILOT_EMBEDDING_OFFLINE=true + WAVEPILOT_KNOWLEDGE_REPOSITORY=memory 纯离线运行）
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-not-configured}
+      WAVEPILOT_EMBEDDING_OFFLINE: ${WAVEPILOT_EMBEDDING_OFFLINE:-false}
+      WAVEPILOT_KNOWLEDGE_REPOSITORY: milvus
+      MILVUS_HOST: standalone
+      MILVUS_PORT: 19530
+      WAVEPILOT_RUNNER_TYPE: ${WAVEPILOT_RUNNER_TYPE:-mock}
+    volumes:
+      # 实验产物、发布模板、上传文件持久化（compose down 不丢数据）
+      - wavepilot-data:/app/data
+      - wavepilot-artifacts:/app/artifacts
+      - wavepilot-uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9900/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  wavepilot-data:
+  wavepilot-artifacts:
+  wavepilot-uploads:

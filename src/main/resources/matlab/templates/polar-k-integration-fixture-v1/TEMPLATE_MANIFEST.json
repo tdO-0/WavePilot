@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "templateName": "polar-k-integration-fixture-v1",
+  "templateVersion": "polar-k-integration-fixture-v1",
+  "entryPoint": "run_experiment",
+  "experimentType": "POLAR_CODE_K_IDENTIFICATION",
+  "algorithmName": "polar-active-channel-energy-baseline-v1",
+  "algorithmVersion": "fixture-1.0.0",
+  "algorithmValidated": false,
+  "classification": "INTEGRATION_FIXTURE",
+  "resultUse": "RUNNER_TIMEOUT_CANCEL_AND_ARTIFACT_INTEGRATION_ONLY"
+}

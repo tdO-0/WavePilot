@@ -1,0 +1,8 @@
+wavepilot:
+  enabled: true
+  runner:
+    type: mock
+  artifacts:
+    root: smoke-artifacts/dashscope
+  knowledge:
+    repository: memory

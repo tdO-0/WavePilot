@@ -1,0 +1,83 @@
+server:
+  port: ${SERVER_PORT:9900}
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+file:
+  upload:
+    path: ./uploads
+    allowed-extensions: txt,md
+    max-size-bytes: 5242880
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:9900}
+
+milvus:
+  host: ${MILVUS_HOST:localhost}
+  port: ${MILVUS_PORT:19530}
+  username: ""
+  password: ""
+  database: default
+  timeout: 10000
+
+# Spring AI Alibaba DashScope 配置
+spring:
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:not-configured}
+      chat:
+        options:
+          model: ${wavepilot.ai.chat-model}
+          timeout: 180000  # 超时时间180秒（3分钟）
+      embedding:
+        enabled: true
+        options:
+          model: ${wavepilot.ai.embedding-model}
+      retry:
+        max-attempts: 3  # 最大重试次数
+        backoff:
+          initial-interval: 2000  # 初始重试间隔2秒
+          multiplier: 2  # 重试间隔倍数
+          max-interval: 10000  # 最大重试间隔10秒
+
+# 文档分片配置
+document:
+  chunk:
+    max-size: 800  # 每个分片最大字符数
+    overlap: 100   # 分片之间的重叠字符数
+
+# WavePilot keeps Mock as the safe default. Set WAVEPILOT_RUNNER_TYPE=local-matlab
+# only on a host with a trusted MATLAB executable. MCP MATLAB is not implemented.
+wavepilot:
+  enabled: true
+  ai:
+    chat-model: "qwen3.7-max"
+    embedding-model: "qwen3.7-text-embedding"
+    timeout-millis: 180000
+  runner:
+    type: ${WAVEPILOT_RUNNER_TYPE:mock}
+    local-matlab:
+      executable: "${MATLAB_EXECUTABLE:matlab}"
+      template: ${WAVEPILOT_MATLAB_TEMPLATE:polar-k-identification-simple-v1}
+      timeout: ${WAVEPILOT_MATLAB_TIMEOUT:10m}
+      poll-interval: ${WAVEPILOT_MATLAB_POLL_INTERVAL:200ms}
+      shutdown-grace: ${WAVEPILOT_MATLAB_SHUTDOWN_GRACE:5s}
+  artifacts:
+    root: "${WAVEPILOT_ARTIFACT_ROOT:artifacts}"
+  replay:
+    numeric-tolerance: 1.0e-9
+  knowledge:
+    repository: ${WAVEPILOT_KNOWLEDGE_REPOSITORY:milvus}
+    collection: wavepilot_knowledge_v1
+  embedding:
+    # true = deterministic offline vectors (no DashScope); for offline demos/tests only
+    offline: ${WAVEPILOT_EMBEDDING_OFFLINE:false}
+  evaluation:
+    # wait limit for Job/Replay eval cases; raise it for a real MATLAB runner (minutes)
+    job-wait-timeout-millis: ${WAVEPILOT_EVAL_JOB_WAIT_MILLIS:10000}
+  spec:
+    default-random-seed: 20

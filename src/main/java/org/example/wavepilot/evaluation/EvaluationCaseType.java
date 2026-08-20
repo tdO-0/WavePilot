@@ -1,0 +1,16 @@
+package org.example.wavepilot.evaluation;
+
+public enum EvaluationCaseType {
+    COMPLETE_SPEC,
+    MISSING_PARAMETER,
+    INVALID_PARAMETER,
+    KNOWLEDGE_RETRIEVAL,
+    TOOL_SELECTION,
+    TOOL_SECURITY,
+    JOB_SUBMISSION,
+    JOB_STATUS,
+    JOB_CANCEL,
+    ARTIFACT_CITATION,
+    REPORT_GROUNDING,
+    REPLAY_CONSISTENCY
+}

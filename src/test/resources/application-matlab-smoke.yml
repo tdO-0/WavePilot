@@ -1,0 +1,14 @@
+wavepilot:
+  enabled: true
+  runner:
+    type: local-matlab
+    local-matlab:
+      executable: "${MATLAB_EXECUTABLE:matlab}"
+      template: polar-k-identification-simple-v1
+      timeout: ${WAVEPILOT_MATLAB_TIMEOUT:5m}
+      poll-interval: 200ms
+      shutdown-grace: 5s
+  artifacts:
+    root: smoke-artifacts/matlab
+  knowledge:
+    repository: memory

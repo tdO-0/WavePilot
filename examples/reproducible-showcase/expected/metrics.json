@@ -1,0 +1,22 @@
+{
+  "executionMode": "deterministic-offline-mock",
+  "parameterPoints": 6,
+  "validatedArtifacts": 5,
+  "accuracy": {
+    "min": 0.901584,
+    "max": 0.95732,
+    "mean": 0.9283471666666667
+  },
+  "replay": {
+    "verdict": "REPRODUCIBLE",
+    "maxAbsDifference": 0.0,
+    "tolerance": 1e-9
+  },
+  "evaluation": {
+    "passedCases": 24,
+    "totalCases": 24,
+    "metricsAtOne": 11,
+    "totalMetrics": 11,
+    "overallTaskCompletionRate": 1.0
+  }
+}
