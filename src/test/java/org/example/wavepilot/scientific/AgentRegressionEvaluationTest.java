@@ -5,6 +5,7 @@ import org.example.wavepilot.artifact.ArtifactType;
 import org.example.wavepilot.evaluation.AgentRegressionComparison;
 import org.example.wavepilot.evaluation.AgentRegressionEvaluationReport;
 import org.example.wavepilot.evaluation.AgentRegressionEvaluationService;
+import org.example.wavepilot.evaluation.AgentEvaluationProfile;
 import org.example.wavepilot.experiment.model.ExperimentSpec;
 import org.example.wavepilot.experiment.model.ExperimentType;
 import org.example.wavepilot.experiment.model.OutputType;
@@ -38,7 +39,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "wavepilot.embedding.offline=true",
         "wavepilot.runner.type=mock",
         "wavepilot.artifacts.root=target/scientific-agent-artifacts",
-        "wavepilot.scientific.run-store=target/scientific-agent-runs"
+        "wavepilot.scientific.run-store=target/scientific-agent-runs",
+        "wavepilot.scientific.execution-ledger-store=target/scientific-agent-ledger"
 })
 class AgentRegressionEvaluationTest {
     @Autowired ScientificAgentService agentService;
@@ -48,7 +50,7 @@ class AgentRegressionEvaluationTest {
     @Autowired ArtifactRegistry artifactRegistry;
 
     @Test
-    void evaluatesNineRegressionDimensionsFromActualRunRetrievalAndReplayRecords() throws Exception {
+    void evaluatesSeventeenRegressionDimensionsForBaselineAndCandidateProfiles() throws Exception {
         AgentRun run = agentService.start(goal());
         RetrievalEvaluationReport retrieval = retrievalService.run();
         ReplayRecord replay = replayService.startReplay(run.getObservations().get(0).jobId(),
@@ -56,19 +58,25 @@ class AgentRegressionEvaluationTest {
         replay = awaitReplay(replay.getReplayId());
 
         AgentRegressionEvaluationReport baseline = evaluationService.evaluate(run.getRunId(),
-                retrieval.evaluationId(), replay.getReplayId());
+                retrieval.evaluationId(), replay.getReplayId(), AgentEvaluationProfile.BASELINE);
         AgentRegressionEvaluationReport candidate = evaluationService.evaluate(run.getRunId(),
-                retrieval.evaluationId(), replay.getReplayId());
+                retrieval.evaluationId(), replay.getReplayId(), AgentEvaluationProfile.CANDIDATE);
         AgentRegressionComparison comparison = evaluationService.compare(
                 baseline.evaluationId(), candidate.evaluationId());
 
-        assertEquals(9, baseline.total());
-        assertEquals(9, baseline.passed());
+        assertEquals(17, baseline.total());
+        assertEquals(17, baseline.passed());
         assertEquals(1.0, baseline.successRate(), 1.0e-12);
+        assertEquals(17, candidate.passed());
+        assertTrue(candidate.telemetry().retrievalQuality() >= 0);
+        assertEquals(0, candidate.telemetry().duplicateExecutionRate(), 1.0e-12);
         assertTrue(comparison.regressedDimensions().isEmpty());
         assertTrue(comparison.releaseAllowed());
         assertTrue(artifactRegistry.listByJobId(run.getRunId()).stream()
                 .anyMatch(record -> record.type() == ArtifactType.AGENT_RUN_TRACE));
+        System.out.printf("AGENT_EVAL baseline=%d/%d candidate=%d/%d baselineTelemetry=%s candidateTelemetry=%s%n",
+                baseline.passed(), baseline.total(), candidate.passed(), candidate.total(),
+                baseline.telemetry(), candidate.telemetry());
     }
 
     private ExperimentGoal goal() {

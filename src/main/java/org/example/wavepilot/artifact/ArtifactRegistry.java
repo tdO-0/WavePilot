@@ -136,6 +136,29 @@ public class ArtifactRegistry {
                 .orElseThrow(() -> new ArtifactStorageException("Artifact not found: " + artifactId)));
     }
 
+    /** Verify a durable-ledger reference without trusting the in-memory registry. */
+    public Path resolveVerifiedReference(String relativePath, String expectedSha256, long expectedSize) {
+        if (relativePath == null || relativePath.isBlank() || Path.of(relativePath).isAbsolute()) {
+            throw new ArtifactStorageException("Ledger artifact path must be relative");
+        }
+        try {
+            Path candidate = root.resolve(relativePath).normalize();
+            ensureWithin(candidate, root);
+            if (Files.isSymbolicLink(candidate)) {
+                throw new ArtifactStorageException("Symbolic links are not allowed as artifacts");
+            }
+            Path realFile = candidate.toRealPath(LinkOption.NOFOLLOW_LINKS);
+            ensureWithin(realFile, root);
+            if (!Files.isRegularFile(realFile, LinkOption.NOFOLLOW_LINKS)
+                    || Files.size(realFile) != expectedSize || !sha256(realFile).equals(expectedSha256)) {
+                throw new ArtifactStorageException("Ledger artifact hash/size verification failed: " + relativePath);
+            }
+            return realFile;
+        } catch (IOException e) {
+            throw new ArtifactStorageException("Cannot verify ledger artifact " + relativePath, e);
+        }
+    }
+
     private Path resolveVerified(ArtifactRecord record) {
         validateJobId(record.jobId());
         try {

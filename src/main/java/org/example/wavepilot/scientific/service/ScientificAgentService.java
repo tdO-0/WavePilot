@@ -16,10 +16,17 @@ import org.example.wavepilot.scientific.model.ArtifactSnapshot;
 import org.example.wavepilot.scientific.model.ExecutionRecord;
 import org.example.wavepilot.scientific.model.ExecutionStatus;
 import org.example.wavepilot.scientific.model.ExperimentGoal;
+import org.example.wavepilot.scientific.model.ExperimentPlanStep;
 import org.example.wavepilot.scientific.model.Observation;
 import org.example.wavepilot.scientific.model.ReplanDecision;
 import org.example.wavepilot.scientific.model.ScientificExperimentPlan;
+import org.example.wavepilot.scientific.model.ScientificCapability;
 import org.example.wavepilot.scientific.model.VerificationResult;
+import org.example.wavepilot.scientific.ledger.ExecutionLedgerEntry;
+import org.example.wavepilot.scientific.ledger.ExecutionLedgerRepository;
+import org.example.wavepilot.scientific.ledger.ExecutionLedgerStatus;
+import org.example.wavepilot.scientific.ledger.ExperimentSpecFingerprint;
+import org.example.wavepilot.scientific.ledger.LedgerArtifactReference;
 import org.example.wavepilot.scientific.repository.AgentRunRepository;
 import org.springframework.stereotype.Service;
 
@@ -42,13 +49,17 @@ public class ScientificAgentService {
     private final ScientificVerifier verifier;
     private final BoundedScientificReplanner replanner;
     private final ArtifactRegistry artifactRegistry;
+    private final ExecutionLedgerRepository executionLedger;
+    private final ExperimentSpecFingerprint fingerprint;
     private final ConcurrentMap<String, Object> runLocks = new ConcurrentHashMap<>();
 
     public ScientificAgentService(AgentRunRepository repository, ScientificPlanner planner,
                                   HybridRetrievalService retrievalService,
                                   ExperimentService experimentService, ScientificVerifier verifier,
                                   BoundedScientificReplanner replanner,
-                                  ArtifactRegistry artifactRegistry) {
+                                  ArtifactRegistry artifactRegistry,
+                                  ExecutionLedgerRepository executionLedger,
+                                  ExperimentSpecFingerprint fingerprint) {
         this.repository = repository;
         this.planner = planner;
         this.retrievalService = retrievalService;
@@ -56,6 +67,8 @@ public class ScientificAgentService {
         this.verifier = verifier;
         this.replanner = replanner;
         this.artifactRegistry = artifactRegistry;
+        this.executionLedger = executionLedger;
+        this.fingerprint = fingerprint;
     }
 
     public AgentRun createCheckpoint(ExperimentGoal goal) {
@@ -113,7 +126,7 @@ public class ScientificAgentService {
             checkpoint(run);
         }
 
-        String retrieveStep = plan.steps().get(0).stepId();
+        String retrieveStep = requiredStep(plan, ScientificCapability.RETRIEVE_EVIDENCE).stepId();
         if (!run.getCompletedSteps().contains(retrieveStep)) {
             run.setState(AgentRunState.RETRIEVING);
             run.setCurrentStep(retrieveStep);
@@ -121,6 +134,7 @@ public class ScientificAgentService {
             try {
                 RetrievalResponse response = retrievalService.search(new KnowledgeSearchRequest(
                         run.getGoal().description(), 5, null, run.getCurrentSpec().experimentType()));
+                run.setRetrievedEvidence(response.evidence());
                 run.getTrace().addRetrieval(elapsed(started), response.denseCandidateCount(),
                         response.sparseCandidateCount(), response.rerankLatencyMillis());
             } catch (RuntimeException unavailableKnowledgeStore) {
@@ -135,7 +149,11 @@ public class ScientificAgentService {
         Observation observation = observationFor(run, iteration);
         if (observation == null) observation = executeAndObserve(run, plan, iteration);
 
-        String verifyStep = plan.steps().get(2).stepId();
+        plan.steps().stream().filter(step -> step.capability() == ScientificCapability.ANALYZE_RESULT)
+                .filter(step -> !run.getCompletedSteps().contains(step.stepId()))
+                .forEach(step -> run.completeStep(step.stepId()));
+
+        String verifyStep = requiredStep(plan, ScientificCapability.VERIFY_GROUNDED_RESULT).stepId();
         run.setState(AgentRunState.VERIFYING);
         run.setCurrentStep(verifyStep);
         long verifyStarted = System.nanoTime();
@@ -160,6 +178,8 @@ public class ScientificAgentService {
         run.setCurrentStep(plan.planId() + "-REPLAN");
         ReplanDecision decision = replanner.replan(run.getGoal(), run.getCurrentSpec(), iteration, run);
         run.addReplan(decision);
+        plan.steps().stream().filter(step -> step.capability() == ScientificCapability.REPLAN_EXPERIMENT)
+                .forEach(step -> run.completeStep(step.stepId()));
         if (!decision.replan() || decision.nextSpec() == null) {
             run.finish(AgentRunState.FAILED, "Safe replan unavailable: " + decision.reason());
             checkpoint(run);
@@ -173,13 +193,43 @@ public class ScientificAgentService {
 
     private Observation executeAndObserve(AgentRun run, ScientificExperimentPlan plan, int iteration)
             throws InterruptedException {
-        String executeStep = plan.steps().get(1).stepId();
+        String executeStep = requiredStep(plan,
+                ScientificCapability.EXECUTE_VALIDATED_EXPERIMENT).stepId();
         String executionId = "EXEC-" + run.getRunId().substring(4) + "-I" + iteration;
+        String specFingerprint = fingerprint.sha256(run.getCurrentSpec());
         ExecutionRecord record = run.execution(executionId);
+        ExecutionLedgerEntry ledger = executionLedger.findByExecutionId(executionId).orElse(null);
+        if (ledger != null && !ledger.experimentSpecFingerprint().equals(specFingerprint)) {
+            throw new IllegalStateException("executionId already belongs to a different ExperimentSpec fingerprint");
+        }
+        if (ledger != null && ledger.currentStatus() == ExecutionLedgerStatus.COMPLETED) {
+            return recoverCompletedExecution(run, ledger, record, executeStep, iteration);
+        }
+        if (ledger != null && ledger.jobId() == null) {
+            executionLedger.save(ledger.withStatus(ExecutionLedgerStatus.UNCERTAIN,
+                    null, ledger.artifactReferences(), ledger.summaryValues(), ledger.retryCount(),
+                    "Submission boundary is ambiguous after restart; duplicate execution is blocked"));
+            throw new IllegalStateException("Unconfirmed execution submission cannot be repeated safely");
+        }
         ExperimentJob job;
-        boolean reused = record != null && record.jobId() != null;
+        boolean reused = ledger != null;
         if (reused) {
-            job = experimentService.get(record.jobId());
+            try {
+                job = experimentService.get(ledger.jobId());
+            } catch (RuntimeException missingJobAfterRestart) {
+                executionLedger.save(ledger.withStatus(ExecutionLedgerStatus.UNCERTAIN,
+                        ledger.jobId(), ledger.artifactReferences(), ledger.summaryValues(),
+                        ledger.retryCount(), "Job state unavailable after restart; completion not assumed"));
+                throw new IllegalStateException("Unconfirmed execution side effect cannot be treated as success");
+            }
+            run.getTrace().recordRecoveredExecution();
+            if (record == null) {
+                record = new ExecutionRecord(executionId, executionId, iteration, executeStep,
+                        ExecutionStatus.RUNNING, ledger.jobId(), ledger.retryCount(), true,
+                        null, ledger.startedAt(), null);
+                run.putExecution(record);
+            }
+            if (run.getExperimentCount() < iteration) run.incrementExperiment();
         } else {
             if (run.getExperimentCount() >= run.getGoal().budget().maxExperiments()) {
                 throw new BudgetLimitException("experiment budget exhausted before execution");
@@ -191,19 +241,41 @@ public class ScientificAgentService {
             }
             record = new ExecutionRecord(executionId, executionId, iteration, executeStep,
                     ExecutionStatus.PENDING, null, 0, false, null, Instant.now(), null);
+            ledger = new ExecutionLedgerEntry(executionId, run.getRunId(), null, specFingerprint,
+                    ExecutionLedgerStatus.PENDING, List.of(), Map.of(), 0, Instant.now(), null, null);
+            executionLedger.save(ledger);
             run.putExecution(record);
             run.setState(AgentRunState.EXECUTING);
             run.setCurrentStep(executeStep);
             checkpoint(run);
-            job = experimentService.create(run.getCurrentSpec(), executionId);
+            try {
+                job = experimentService.create(run.getCurrentSpec(), executionId);
+            } catch (RuntimeException ambiguousSubmission) {
+                executionLedger.save(ledger.withStatus(ExecutionLedgerStatus.UNCERTAIN,
+                        null, List.of(), Map.of(), record.retryCount(),
+                        "Job submission failed at an ambiguous side-effect boundary: "
+                                + ambiguousSubmission.getMessage()));
+                throw ambiguousSubmission;
+            }
             run.incrementExperiment();
             record = record.with(ExecutionStatus.RUNNING, job.getJobId(), 0, false, null);
+            ledger = ledger.withStatus(ExecutionLedgerStatus.RUNNING, job.getJobId(),
+                    List.of(), Map.of(), 0, null);
+            executionLedger.save(ledger);
             run.putExecution(record);
             checkpoint(run);
         }
 
         long executionStarted = System.nanoTime();
-        ExperimentStatus terminal = awaitTerminal(run, job.getJobId());
+        ExperimentStatus terminal;
+        try {
+            terminal = awaitTerminal(run, job.getJobId());
+        } catch (RuntimeException statusUncertain) {
+            executionLedger.save(ledger.withStatus(ExecutionLedgerStatus.UNCERTAIN, job.getJobId(),
+                    ledger.artifactReferences(), ledger.summaryValues(), record.retryCount(),
+                    "Could not confirm terminal job status: " + statusUncertain.getMessage()));
+            throw statusUncertain;
+        }
         run.getTrace().addExecutionLatency(elapsed(executionStarted));
         if (terminal != ExperimentStatus.SUCCEEDED) {
             record = record.with(terminal == ExperimentStatus.CANCELLED
@@ -211,20 +283,57 @@ public class ScientificAgentService {
                     job.getJobId(), record.retryCount(), reused,
                     "Experiment job ended with " + terminal);
             run.putExecution(record);
+            executionLedger.save(ledger.withStatus(ExecutionLedgerStatus.FAILED, job.getJobId(),
+                    ledger.artifactReferences(), ledger.summaryValues(), record.retryCount(), record.error()));
             checkpoint(run);
             throw new IllegalStateException(record.error());
         }
+        ExperimentService.ExperimentSummaryView summary = experimentService.readExperimentSummary(job.getJobId());
+        List<ArtifactRecord> records = experimentService.artifacts(job.getJobId());
+        List<LedgerArtifactReference> references = records.stream()
+                .map(LedgerArtifactReference::from).toList();
+        ledger = ledger.withStatus(ExecutionLedgerStatus.COMPLETED, job.getJobId(), references,
+                summary.values(), record.retryCount(), null);
+        executionLedger.save(ledger);
         record = record.with(ExecutionStatus.COMPLETED, job.getJobId(), record.retryCount(), reused, null);
         run.putExecution(record);
         run.completeStep(executeStep);
         run.setState(AgentRunState.OBSERVING);
         checkpoint(run);
 
-        ExperimentService.ExperimentSummaryView summary = experimentService.readExperimentSummary(job.getJobId());
-        List<ArtifactRecord> records = experimentService.artifacts(job.getJobId());
         Observation observation = new Observation(iteration, executionId, job.getJobId(),
                 summary.values(), records.stream().map(ArtifactSnapshot::from).toList(),
                 records.stream().allMatch(ArtifactRecord::validated), Instant.now());
+        run.addObservation(observation);
+        checkpoint(run);
+        return observation;
+    }
+
+    private Observation recoverCompletedExecution(AgentRun run, ExecutionLedgerEntry ledger,
+                                                  ExecutionRecord existing, String executeStep,
+                                                  int iteration) {
+        if (ledger.jobId() == null || ledger.artifactReferences().isEmpty()
+                || ledger.summaryValues().isEmpty()) {
+            throw new IllegalStateException("Completed ledger entry lacks durable evidence");
+        }
+        List<ArtifactSnapshot> artifacts = ledger.artifactReferences().stream().map(reference -> {
+            if (!reference.validated()) throw new IllegalStateException("Ledger artifact was not validated");
+            artifactRegistry.resolveVerifiedReference(reference.relativePath(), reference.sha256(), reference.size());
+            return new ArtifactSnapshot(reference.artifactId(), reference.artifactType(),
+                    reference.relativePath(), reference.sha256(), reference.size(), true);
+        }).toList();
+        ExecutionRecord recovered = existing == null
+                ? new ExecutionRecord(ledger.executionId(), ledger.executionId(), iteration, executeStep,
+                ExecutionStatus.COMPLETED, ledger.jobId(), ledger.retryCount(), true, null,
+                ledger.startedAt(), ledger.completedAt())
+                : existing.with(ExecutionStatus.COMPLETED, ledger.jobId(), ledger.retryCount(), true, null);
+        run.putExecution(recovered);
+        if (run.getExperimentCount() < iteration) run.incrementExperiment();
+        run.completeStep(executeStep);
+        run.setState(AgentRunState.OBSERVING);
+        run.getTrace().recordRecoveredExecution();
+        Observation observation = new Observation(iteration, ledger.executionId(), ledger.jobId(),
+                ledger.summaryValues(), artifacts, true, Instant.now());
         run.addObservation(observation);
         checkpoint(run);
         return observation;
@@ -269,6 +378,13 @@ public class ScientificAgentService {
     private Observation observationFor(AgentRun run, int iteration) {
         return run.getObservations().stream().filter(value -> value.iteration() == iteration)
                 .reduce((first, second) -> second).orElse(null);
+    }
+
+    private ExperimentPlanStep requiredStep(ScientificExperimentPlan plan,
+                                            ScientificCapability capability) {
+        return plan.steps().stream().filter(step -> step.capability() == capability)
+                .findFirst().orElseThrow(() -> new IllegalArgumentException(
+                        "Scientific plan is missing required capability " + capability));
     }
 
     private void validateInitialBoundaries(AgentRun run) {

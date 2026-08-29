@@ -1,6 +1,7 @@
 package org.example.wavepilot.knowledge.evaluation;
 
 import org.example.wavepilot.knowledge.retrieval.RetrievalStrategy;
+import org.example.wavepilot.knowledge.retrieval.QueryType;
 
 import java.time.Instant;
 import java.util.List;
@@ -14,9 +15,13 @@ public record RetrievalEvaluationReport(
         Instant generatedAt,
         Map<RetrievalStrategy, RetrievalMetrics> metrics,
         List<RetrievalCaseResult> caseResults,
+        Map<QueryType, Integer> queryTypeCounts,
+        List<RetrievalEvaluationComparison> comparisons,
         String disclosure) {
     public RetrievalEvaluationReport {
         metrics = Map.copyOf(metrics);
         caseResults = List.copyOf(caseResults);
+        queryTypeCounts = Map.copyOf(queryTypeCounts);
+        comparisons = List.copyOf(comparisons);
     }
 }

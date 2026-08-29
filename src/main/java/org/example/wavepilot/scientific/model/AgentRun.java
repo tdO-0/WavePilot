@@ -1,6 +1,7 @@
 package org.example.wavepilot.scientific.model;
 
 import org.example.wavepilot.experiment.model.ExperimentSpec;
+import org.example.wavepilot.knowledge.model.KnowledgeSearchResult;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -20,6 +21,7 @@ public class AgentRun {
     private List<Observation> observations = new ArrayList<>();
     private List<VerificationResult> verificationResults = new ArrayList<>();
     private List<ReplanDecision> replanDecisions = new ArrayList<>();
+    private List<KnowledgeSearchResult> retrievedEvidence = new ArrayList<>();
     private int retryCount;
     private int replanCount;
     private int iterationCount;
@@ -61,6 +63,10 @@ public class AgentRun {
     public void setVerificationResults(List<VerificationResult> value) { verificationResults = mutable(value); }
     public List<ReplanDecision> getReplanDecisions() { return List.copyOf(replanDecisions); }
     public void setReplanDecisions(List<ReplanDecision> value) { replanDecisions = mutable(value); }
+    public List<KnowledgeSearchResult> getRetrievedEvidence() { return List.copyOf(retrievedEvidence); }
+    public void setRetrievedEvidence(List<KnowledgeSearchResult> value) {
+        retrievedEvidence = mutable(value); touch();
+    }
     public int getRetryCount() { return retryCount; }
     public void setRetryCount(int value) { retryCount = value; }
     public int getReplanCount() { return replanCount; }

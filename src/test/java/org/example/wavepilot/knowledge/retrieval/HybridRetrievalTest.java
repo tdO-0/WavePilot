@@ -74,6 +74,22 @@ class HybridRetrievalTest {
         assertEquals(QueryType.EXPERIMENT_GUIDANCE, router.route(request("experiment workflow recipe")).queryType());
     }
 
+    @Test
+    void inferredTypeIsSoftRoutingButExplicitUserFilterRemainsHard() throws Exception {
+        HybridRetrievalProperties properties = new HybridRetrievalProperties();
+        QueryRouter router = new QueryRouter(properties);
+        QueryRoute inferred = router.route(new KnowledgeSearchRequest("MATLAB error debug", 5,
+                null, ExperimentType.POLAR_CODE_K_IDENTIFICATION));
+        QueryRoute explicit = router.route(new KnowledgeSearchRequest("MATLAB error debug", 5,
+                DocumentType.THEORY, ExperimentType.POLAR_CODE_K_IDENTIFICATION));
+
+        assertEquals(null, inferred.documentType());
+        assertEquals(DocumentType.FAILURE_CASE, inferred.primaryDocumentType());
+        assertTrue(inferred.fallbackDocumentTypes().contains(DocumentType.THEORY));
+        assertEquals(DocumentType.THEORY, explicit.documentType());
+        assertTrue(explicit.explicitDocumentFilter());
+    }
+
     private HybridRetrievalService service(DenseRetriever dense, SparseRetriever sparse, String reranker) {
         HybridRetrievalProperties properties = new HybridRetrievalProperties();
         properties.setReranker(reranker);

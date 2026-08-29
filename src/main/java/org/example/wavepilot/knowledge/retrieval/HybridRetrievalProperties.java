@@ -10,6 +10,7 @@ public class HybridRetrievalProperties {
     private int sparseCandidateK = 20;
     private int resultTopK = 5;
     private int rrfK = 60;
+    private double routingBoost = 1.08;
     private String reranker = "deterministic";
 
     public int getDenseCandidateK() { return clamp(denseCandidateK, 1, 100); }
@@ -22,6 +23,8 @@ public class HybridRetrievalProperties {
     public void setRrfK(int rrfK) { this.rrfK = rrfK; }
     public String getReranker() { return reranker; }
     public void setReranker(String reranker) { this.reranker = reranker; }
+    public double getRoutingBoost() { return Math.max(1.0, Math.min(2.0, routingBoost)); }
+    public void setRoutingBoost(double routingBoost) { this.routingBoost = routingBoost; }
 
     private int clamp(int value, int minimum, int maximum) {
         return Math.max(minimum, Math.min(maximum, value));

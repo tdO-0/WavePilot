@@ -25,11 +25,30 @@ class RetrievalMetricCalculatorTest {
         RetrievalCaseResult result = new RetrievalMetricCalculator().calculate(evalCase,
                 RetrievalStrategy.HYBRID_RRF, QueryType.THEORY, List.of(irrelevant, relevant));
 
-        assertEquals(1.0, result.recallAtK(), 1.0e-12);
-        assertEquals(1.0 / 3.0, result.precisionAtK(), 1.0e-12);
+        assertEquals(0.0, result.recallAt1(), 1.0e-12);
+        assertEquals(1.0, result.recallAt3(), 1.0e-12);
+        assertEquals(1.0, result.recallAt5(), 1.0e-12);
+        assertEquals(1.0 / 3.0, result.precisionAt3(), 1.0e-12);
+        assertEquals(1.0 / 5.0, result.precisionAt5(), 1.0e-12);
         assertEquals(0.5, result.reciprocalRank(), 1.0e-12);
-        assertEquals(1.0 / (Math.log(3) / Math.log(2)), result.ndcgAtK(), 1.0e-12);
+        assertEquals(1.0 / (Math.log(3) / Math.log(2)), result.ndcgAt3(), 1.0e-12);
+        assertEquals(1.0 / (Math.log(3) / Math.log(2)), result.ndcgAt5(), 1.0e-12);
         assertEquals(1.0, result.citationHitRate(), 1.0e-12);
+        assertEquals(1.0, result.hardNegativeRejectionRate(), 1.0e-12);
+    }
+
+    @Test
+    void computesHardNegativeRejectionFromActualTopFive() {
+        RetrievalEvaluationCase evalCase = new RetrievalEvaluationCase("hard-negative", "query",
+                QueryType.THEORY, Set.of("REL"), Set.of(), Set.of("HN-RETRIEVED", "HN-REJECTED"),
+                DocumentType.THEORY, ExperimentType.POLAR_CODE_K_IDENTIFICATION, 5, false);
+
+        RetrievalCaseResult result = new RetrievalMetricCalculator().calculate(evalCase,
+                RetrievalStrategy.HYBRID_RRF, QueryType.THEORY, List.of(
+                        result("REL", "DOC-REL", "KB[DOC-REL/REL]"),
+                        result("HN-RETRIEVED", "DOC-HN", "KB[DOC-HN/HN-RETRIEVED]")));
+
+        assertEquals(0.5, result.hardNegativeRejectionRate(), 1.0e-12);
     }
 
     private KnowledgeSearchResult result(String chunk, String document, String citation) {

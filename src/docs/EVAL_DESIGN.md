@@ -1,75 +1,93 @@
-# Phase 5D 离线 Eval 设计
+# Evaluation Design
 
-更新时间：2026-08-30
+WavePilot separates three evaluation layers so software correctness is not confused with communication-algorithm or model quality.
 
-## 目标与边界
+## Platform Offline Eval
 
-Eval 用固定测试 Case 评价 **Agent 与平台流程**（Spec 解析、缺参追问、Java 校验、工具选择、工具安全、Job 创建与状态、Artifact Citation、报告 Grounding、Replay 一致性），**不是**极化码算法的科研精度。
+The original 24 fixed cases exercise Spec parsing, missing/invalid parameter handling, controlled tool selection, tool security, Job state transitions, knowledge retrieval, Artifact citation, report grounding and Replay consistency. Default fixtures use scripted models and Mock Runner; platform validators and services are real.
 
-默认离线 Eval 使用脚本化 Stub/Fake Model（`stub-v1` 参考实现、`stub-v2` 带脚本化缺陷），**不调用 DashScope**；平台侧（Java Validator、工具安全闸、ExperimentService、ReplayService、ReportCitationValidator）全部是真实组件。真实模型 Eval 属 `external-eval` profile，默认关闭；未真实运行时不得声称外部 Eval 已通过。
+Metrics are calculated from case outcomes rather than hardcoded: spec parse accuracy, missing-parameter detection, invalid-parameter blocking, tool selection, forbidden-tool blocking, Job submission, retrieval, Artifact citation, report grounding, Replay consistency and overall completion.
 
-## 数据集
+`POST /api/evaluations/compare` compares baseline and candidate on the same cases. Any passed-to-failed case or decreasing metric blocks release. The optional `external-eval` profile covers real-model parsing separately and must not be reported unless actually run.
 
-24 个固定 Case（每种 CaseType 2 个）＋固定知识语料（2 个 chunk，由检索执行器幂等 upsert）：
+## Retrieval Eval
 
-| CaseType | 验证内容 |
-|---|---|
-| COMPLETE_SPEC | 完整自然语言解析出的 Spec 通过 Java 校验且包含全部预期字段 |
-| MISSING_PARAMETER | 缺参被识别并列出正确缺失字段 |
-| INVALID_PARAMETER | 非法参数被 Java Validator 拦截且错误提及预期字段 |
-| KNOWLEDGE_RETRIEVAL | 真实知识库检索命中预期内容 |
-| TOOL_SELECTION | Stub 选择的工具与预期工具一致 |
-| TOOL_SECURITY | 工具安全闸拒绝非受控/被禁工具；合法路径只允许受控工具 |
-| JOB_SUBMISSION / JOB_STATUS / JOB_CANCEL | 真实 ExperimentService 状态机与受控 Runner |
-| ARTIFACT_CITATION / REPORT_GROUNDING | 报告链：引用全部指向已验证 Artifact，数值结论有 Citation 原值支撑 |
-| REPLAY_CONSISTENCY | 完整 source→replay 链路判定 REPRODUCIBLE |
+Dataset: `wavepilot-bilingual-retrieval-v2`.
 
-每个 Case 保存：caseId、caseType、description、input、expectedResult、expectedTool、forbiddenTools、expectedStatus、expectedFields、tags，以及执行后的 passed、actualResult、actualTool、failureReason。
+- 80 queries: 20 `THEORY`, 20 `PARAMETER`, 20 `TROUBLESHOOTING`, 20 `EXPERIMENT_GUIDANCE`.
+- 46 chunks: 42 relevant domain chunks and 4 high-overlap semantic hard negatives.
+- Chinese, English and mixed-language text.
+- Acronyms and identifiers including BPSK, AWGN, BER, BLER, SNR, Eb/N0, camelCase and snake_case.
+- Synonyms and low lexical-overlap semantic queries.
+- Multi-relevant, cross-section and explicit metadata-filter cases.
 
-## 指标
+Each judgment stores id, query, queryType, relevant chunk/document IDs, hard-negative chunk IDs, documentType, experimentType, topK and whether the document filter is explicit.
 
-全部由 Case 实际执行结果计算（numerator/denominator），禁止写死百分比：
+The same dataset evaluates:
 
-specParseAccuracy、missingParameterDetectionRate、invalidParameterBlockRate、toolSelectionAccuracy、forbiddenToolBlockRate、jobSubmissionSuccessRate、knowledgeRetrievalRate、artifactCitationConsistencyRate、reportGroundingRate、replayConsistencyRate、overallTaskCompletionRate。
+1. Dense Only;
+2. BM25 Only;
+3. Hybrid RRF;
+4. Hybrid RRF + Deterministic Rerank;
+5. Hybrid RRF + Model Rerank strategy.
 
-## 工具安全
+In offline CI, strategy 5 records `model-fallback-deterministic`; it is not represented as a real model run. An opt-in configured provider uses the controlled listwise scorer.
 
-`EvaluationToolGuard.CONTROLLED_TOOLS` 与 `WavePilotAgentTools` 的 10 个 `@Tool` 完全一致（测试反射校验）。安全闸拒绝：非受控工具、被显式禁止的工具；Agent 永远无法通过 Eval 触达进程、文件或 Repository。
+Per case and aggregate metrics:
 
-## Baseline / Candidate
+- Recall@1, @3, @5;
+- Precision@3, @5;
+- MRR;
+- nDCG@3, @5;
+- Citation Hit Rate;
+- Hard Negative Rejection Rate;
+- total and rerank latency.
 
-`POST /api/evaluations/compare` 对**同一数据集**的两个 Run 做配对比较：每项指标的 baseline/candidate/delta、退化 Case 列表、新增通过 Case 列表、releaseAllowed（无退化 Case 且无指标下降）。逐 Case 结果始终保留，禁止只看总分。
+Outputs are `retrieval-eval.json`, `retrieval-eval.md`, and `retrieval-eval-comparison.json`. Comparisons include Dense → Hybrid, Hybrid → deterministic rerank and deterministic → model strategy deltas with an explicit measured/no-measured-improvement interpretation.
 
-## Knowledge/RAG Retrieval Eval
+```powershell
+mvn -B "-Dtest=RetrievalEvaluationReportTest" test
+```
 
-`RetrievalEvaluationDataset` 是单独版本化的数据集 `wavepilot-hybrid-retrieval-v1`。每个 Case
-包含 query、relevantChunkIds、relevantDocumentIds、QueryType、可选 metadata filter 和 topK。
-运行时对同一批 6 个 Case 自动比较：
+The reproducible quality table is in the README. Latency is emitted by every run but is environment-sensitive and should be compared only on controlled hardware.
 
-1. Dense Only；
-2. BM25 Only；
-3. Hybrid RRF；
-4. Hybrid RRF + Deterministic Rerank。
+## Agent Regression Eval
 
-`RetrievalMetricCalculator` 从实际返回顺序计算 Recall@K、Precision@K、MRR、nDCG@K 和
-Citation Hit Rate。`RetrievalEvaluationService` 同时登记 JSON 与 Markdown Artifact。当前实际
-Top-3 结果四路均为 Recall=1.0、Precision=0.333333、MRR=1.0、nDCG=1.0、Citation Hit
-Rate=1.0。这个精确匹配小数据集验证实现正确性，不构成策略优劣或科研效果证据。
+`AgentRegressionEvaluationService` consumes actual `AgentRun`, Retrieval Eval and `ReplayRecord` objects. It evaluates 17 dimensions:
 
-## Scientific Agent Regression Eval
+- task success;
+- plan validity;
+- tool-selection correctness;
+- final ExperimentSpec validity;
+- citation validity;
+- retrieval quality;
+- grounded-result consistency;
+- Replay success;
+- loop termination;
+- invalid tool-call rate;
+- invalid ExperimentSpec rate;
+- replan success rate;
+- Artifact grounding success;
+- recovery success;
+- duplicate execution rate;
+- total latency within budget;
+- model calls within budget.
 
-`AgentRegressionEvaluationService` 不接受模型自报分数，而是读取实际 AgentRun、Retrieval
-Evaluation 和 ReplayRecord，计算 9 个布尔维度：task success、plan validity、tool selection
-correctness、ExperimentSpec validity、citation validity、retrieval quality、grounded result
-consistency、replay success、loop termination。Baseline/Candidate 按维度配对，任何由 pass
-变 fail 的维度都会进入 `regressedDimensions` 并阻止 release。
+Telemetry preserves numeric rates and values instead of only booleans. Baseline uses Dense retrieval with deterministic Planner/Reranker. Candidate uses Hybrid/model-rerank strategy, the improved Router and any explicitly enabled model components. Default CI has zero model calls.
 
-## API
+The fixed offline result is baseline 17/17 and candidate 17/17. Candidate retrieval R@5 is `0.904167` versus baseline Dense `0.531250`; citation validity is `0.937500` versus `0.562500`. This is a software regression comparison over the fixed retrieval fixture, not a model or scientific benchmark.
 
-- `POST /api/evaluations/run`（datasetName、modelName；默认 stub-v1）
-- `GET /api/evaluations`
-- `GET /api/evaluations/{evaluationId}`
-- `GET /api/evaluations/{evaluationId}/report`
+## Grounding and Recovery Metrics
+
+- Citation validity requires retrieved citations plus validated/hash-bearing Artifact snapshots; the raw citation hit rate remains visible.
+- Replan success counts accepted proposals that pass Java validation.
+- Recovery success is one when every attempted reused execution reaches verified completion; no-attempt runs are neutral and report attempts in evidence.
+- Duplicate rate uses distinct execution IDs plus explicit duplicate trace events.
+- Model calls and token counts come from routing/provider data; missing provider usage is not estimated.
+
+## APIs
+
+- `POST /api/evaluations/run`
 - `POST /api/evaluations/compare`
 - `POST /api/retrieval-evaluations/run`
 - `GET /api/retrieval-evaluations/{evaluationId}`
@@ -77,20 +95,10 @@ consistency、replay success、loop termination。Baseline/Candidate 按维度�
 - `POST /api/agent-regression-evaluations/run`
 - `POST /api/agent-regression-evaluations/compare`
 
-ArtifactType 增加 `EVAL_REPORT`、`EVAL_CASE_RESULTS`、`EVAL_COMPARISON`，登记在 evaluationId 目录下。
+## Interpretation Rules
 
-## 测试
-
-11 个新测试类（35 项）：EvaluationDatasetTest、EvaluationCaseExecutionTest、EvaluationMetricCalculationTest、EvaluationNoHardcodedMetricTest、EvaluationToolSecurityTest、EvaluationReportGroundingTest、EvaluationArtifactRegistrationTest、EvaluationBaselineCandidateTest、EvaluationRegressionDetectionTest、EvaluationControllerContractTest、ReplayRegressionTest。
-
-默认测试使用内存知识库与确定性 Embedding（`EvaluationTestSupport.DeterministicEmbeddingService`，同词同向量），不依赖 Milvus/MATLAB/DashScope。
-
-## 真实 Runner 注意事项
-
-Job/Replay 类 Case 的等待上限由 `wavepilot.evaluation.job-wait-timeout-millis` 控制（默认 10000 ms，适合毫秒级 Mock Runner）。使用真实 MATLAB Runner 时需调大（如 `WAVEPILOT_EVAL_JOB_WAIT_MILLIS=300000`），否则 Job/Replay Case 会以 `WAIT_TIMEOUT` 明确失败——任务本身仍在执行，不是平台故障。应用内离线运行 Eval（`mvn spring-boot:run` 演示）需要同时设置 `WAVEPILOT_KNOWLEDGE_REPOSITORY=memory` 与 `WAVEPILOT_EMBEDDING_OFFLINE=true`，否则内存知识库的检索仍会调用 DashScope Embedding 并返回 401。
-
-## 未验证边界
-
-- `external-eval` profile（`mvn -B -Pexternal-eval -DDASHSCOPE_API_KEY=... verify`）会用真实 DashScope 解析器执行 Spec 类 Case；工具/平台类 Case 明确记录为 NOT_COVERED。未真实运行时不得声称真实模型 Eval 已通过。
-- stub-v2 的"退化"是脚本化缺陷，不代表真实模型表现。
-- Eval 指标衡量流程正确性，不是科研算法精度。
+- Never report Mock accuracy as MATLAB or communication-algorithm accuracy.
+- Never report the offline model-rerank strategy as a real model result when `rerankerUsed` says fallback.
+- Do not claim Hybrid is universally superior: on the fixed dataset BM25 is slightly stronger than Hybrid rerank on several ranking metrics.
+- Do not compare latency from different machines as a causal improvement.
+- A real-model number requires the opt-in command, provider configuration and retained generated Artifact.

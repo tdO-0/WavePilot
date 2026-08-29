@@ -16,7 +16,8 @@ public class AgentRegressionEvaluationController {
 
     @PostMapping("/run")
     public AgentRegressionEvaluationReport run(@RequestBody RunRequest request) {
-        return service.evaluate(request.runId(), request.retrievalEvaluationId(), request.replayId());
+        return service.evaluate(request.runId(), request.retrievalEvaluationId(), request.replayId(),
+                request.profile() == null ? AgentEvaluationProfile.CANDIDATE : request.profile());
     }
 
     @GetMapping("/{evaluationId}")
@@ -29,6 +30,7 @@ public class AgentRegressionEvaluationController {
         return service.compare(request.baselineEvaluationId(), request.candidateEvaluationId());
     }
 
-    public record RunRequest(String runId, String retrievalEvaluationId, String replayId) { }
+    public record RunRequest(String runId, String retrievalEvaluationId, String replayId,
+                             AgentEvaluationProfile profile) { }
     public record CompareRequest(String baselineEvaluationId, String candidateEvaluationId) { }
 }

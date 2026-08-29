@@ -1,68 +1,80 @@
-# Scientific Agent Loop 设计
+# Scientific Agent Loop
 
-更新时间：2026-08-30
-
-## 闭环
+## Controlled Loop
 
 ```text
 Goal -> Plan -> Retrieve -> Execute -> Observe -> Verify -> Replan / Finish
 ```
 
-`ExperimentGoal` 包含自然语言目标、初始 `ExperimentSpec`、目标 metric/operator/threshold、
-`ParameterBounds` 和 `RunBudget`。`ScientificPlanner` 只产生注册能力：检索 Evidence、执行已
-校验实验、验证 grounded 结果。计划没有代码、命令、Runner 或文件路径字段。
+`ExperimentGoal` contains the natural-language objective, initial `ExperimentSpec`, target metric/operator/threshold, `ParameterBounds` and `RunBudget`. The loop reaches one of `SUCCEEDED`, `FAILED`, `BUDGET_EXHAUSTED`, `TIMED_OUT` or `CANCELLED`; it cannot continue without a bounded terminal condition.
 
-## 执行安全
+## Planner Modes
 
-`ScientificAgentService` 在每次执行前调用 `ExperimentService.parseAndValidate`，然后以
-executionId 调用 `ExperimentService.create(spec, executionId)`。这条路径继续使用现有：
+Deterministic mode is the offline default. The optional `DashScopeScientificPlanModel` receives goal, current state, iteration, current Spec, evidence count and the registered capability set. It may select only:
 
-- `ExperimentSpecValidator`；
-- `ExperimentStateMachine`；
-- Mock / Local MATLAB `ExperimentRunner`；
-- `ResultValidator`；
-- `ArtifactRegistry`。
+- `RETRIEVE_EVIDENCE`;
+- `EXECUTE_VALIDATED_EXPERIMENT`;
+- `ANALYZE_RESULT`;
+- `VERIFY_GROUNDED_RESULT`;
+- `REPLAN_EXPERIMENT`.
 
-Planner 或 Replanner 的输出不能直接调用 Runner，也不能改变 MATLAB 模板白名单。
+Its DTO contains only a capability-name array. `ScientificPlanSchemaValidator` rejects unknown or duplicate capabilities, missing required steps and unsafe ordering. Java attaches the current `ExperimentSpec` to the execute step; a model never supplies Java, MATLAB, Shell, paths, executables or custom tools.
 
-## Observe 与 Verify
+Planner model use is skipped when the model-call or token budget has no remaining capacity. Provider, parse or Schema failure is recorded in `AgentRunTrace` and falls back to the deterministic three-step plan.
 
-Observation 只在 ExperimentJob 为 `SUCCEEDED` 后创建，包含 summary 的实际 metric 和所有
-Artifact 的 id/type/relativePath/SHA-256/size/validated 快照。Verifier 确定性检查：
+Enable the optional planner with:
 
-1. spec/plan/CSV/summary/log 是否齐全并已 validated；
-2. 文件 SHA-256 与大小是否仍一致；
-3. 目标 metric 是否来自 validated summary；
-4. operator/threshold 是否满足。
+```powershell
+$env:WAVEPILOT_SCIENTIFIC_PLANNER_MODE = "model"
+```
 
-Semantic model 不参与默认验证。`ModelRouter` 记录 route/reason；provider 没返回 usage 时，
-token 字段保持 null，绝不估算成本。
+## Execute, Observe, Verify
 
-## Replan 与终止
+`ScientificAgentService` calls `ExperimentService.parseAndValidate` before a first submission and uses stable `executionId` as the idempotency key. The execution path retains the existing Java state machine, approved Runner selection, result validation and Artifact registry.
 
-`BoundedScientificReplanner` 对每个数值参数应用 minimum、maximum、maximumChangePerReplan，
-再把新 Spec 交给 Java Validator。以下任一条件会阻止无限循环：
+An Observation is built only from a `SUCCEEDED` Job or a completed Ledger entry whose Artifact references pass path, size and SHA-256 validation. It records summary values and Artifact id/type/path/hash/size/validated snapshots.
 
-- maxIterations；
-- maxExperiments；
-- maxModelCalls；
-- maxTokens；
-- wall-clock timeout；
-- 参数到达边界或无法保持 Spec 合法；
-- 明确 terminal state。
+`ScientificVerifier` deterministically checks required Artifact presence, validated state, current hash/size, grounded metric origin and goal threshold. The optional semantic model does not authorize verification success.
 
-终态为 `SUCCEEDED / FAILED / BUDGET_EXHAUSTED / TIMED_OUT / CANCELLED`。
+## Semantic Replan
 
-## 离线闭环实际结果
+Deterministic mode adjusts only declared numeric parameters. Optional `DashScopeSemanticReplanModel` sees:
 
-自动化案例从较高 BSC error-rate 区间开始搜索 `averageAccuracy >= 0.82`。默认 Mock Runner
-实际执行 3 个 ExperimentJob，Replanner 实际修改区间 2 次；最后 grounded
-`averageAccuracy=0.898440`，AgentRun 为 `SUCCEEDED`。这些数值是 Mock 软件夹具，只证明
-Agent Loop 的控制流，不是极化码科研结果。
+- `Observation`;
+- latest `VerificationResult`;
+- retrieved evidence;
+- previous parameter changes;
+- current Spec and `ParameterBounds`.
+
+It proposes one complete `ExperimentSpec`. Java accepts it only if:
+
+1. every changed parameter is explicitly registered in `ParameterBounds`;
+2. no structural or unregistered field changed;
+3. absolute bounds hold;
+4. every change is within `maximumChangePerReplan`;
+5. `ExperimentSpecValidator` accepts it;
+6. iteration, experiment, model-call, token and time budgets remain.
+
+Invalid semantic proposals are counted and fall back to deterministic bounded replan.
+
+```powershell
+$env:WAVEPILOT_SCIENTIFIC_REPLANNER_MODE = "model"
+```
+
+## Trace and Regression Metrics
+
+`AgentRunTrace` records planning/retrieval/rerank/execution/verification latency, candidate counts, routing decisions, model calls, provider-reported tokens when available, invalid plan/spec/tool counts, recovered executions, duplicate executions, replans, terminal status and total latency.
+
+Agent Regression Eval derives 17 dimensions from actual AgentRun, Retrieval Eval and Replay records. It reports rate telemetry for plan validity, loop termination, invalid calls/specs, replan success, Artifact grounding, recovery, duplicate execution, retrieval, citation, latency and model calls.
+
+## Offline Fixture Result
+
+The fixed Mock case reaches `SUCCEEDED` after three experiments and two bounded replans, with grounded fixture value `averageAccuracy=0.898440`. This validates loop control and grounding only; it is not a polar-code or MATLAB performance result.
 
 ## API
 
-- `POST /api/scientific-agent/runs`：创建并同步运行到终态；
-- `POST /api/scientific-agent/runs/checkpoints`：只创建初始 checkpoint；
-- `POST /api/scientific-agent/runs/{runId}/resume`：恢复；
-- `GET /api/scientific-agent/runs/{runId}` / `GET /api/scientific-agent/runs`：查询。
+- `POST /api/scientific-agent/runs`
+- `POST /api/scientific-agent/runs/checkpoints`
+- `POST /api/scientific-agent/runs/{runId}/resume`
+- `GET /api/scientific-agent/runs/{runId}`
+- `GET /api/scientific-agent/runs`

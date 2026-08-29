@@ -1,57 +1,87 @@
-# Durable Execution 设计
+# Durable Execution
 
-更新时间：2026-08-30
+## Two Durable Records
 
-## Checkpoint 模型
+`AgentRun` is the orchestration checkpoint. It stores goal, current Spec and plan, current/completed steps, execution records, observations, verifications, replans, retrieved evidence, counters, state, timestamps and trace.
 
-`AgentRun` 持久化：runId、goal、currentSpec、currentPlan、currentStep、completedSteps、
-ExecutionRecord、Observation、VerificationResult、ReplanDecision、retry/replan/iteration/experiment
-计数、状态、时间戳和 AgentRunTrace。
+`ExecutionLedgerEntry` is the side-effect record. It stores:
 
-`FileAgentRunRepository` 适配当前单体：
+- `executionId` and `runId`;
+- ExperimentJob `jobId` when known;
+- canonical SHA-256 `ExperimentSpec` fingerprint;
+- `PENDING / RUNNING / COMPLETED / FAILED / UNCERTAIN` status;
+- durable Artifact references with type, relative path, SHA-256, size and validated flag;
+- grounded summary values;
+- retry count and start/completion timestamps;
+- failure or uncertainty reason.
 
-- 默认目录 `data/wavepilot/agent-runs`；
-- 只允许 `RUN-XXXXXXXX-XXX`；
-- JSON 临时文件完成后原子替换；
-- Repository 接口可替换为 JDBC；
-- 每个阶段转换前后 checkpoint。
+Both repositories are interfaces. The default single-node implementations use pretty JSON, safe IDs, normalized paths and temporary-file atomic replacement. The Ledger directory defaults to `data/wavepilot/execution-ledger`.
 
-## 幂等与恢复规则
+## Idempotency
 
-每个实验执行使用稳定 `EXEC-{run}-I{iteration}` executionId/idempotencyKey。
-`ExperimentService.create(spec, key)` 在同一运行实例内对重复 key 返回原 ExperimentJob。
+Each Agent iteration derives a stable key:
 
-恢复决策：
+```text
+EXEC-{run-id-without-prefix}-I{iteration}
+```
 
-| checkpoint 状态 | 行为 |
+The same executionId must always map to the same canonical Spec fingerprint. A mismatch fails closed. Within a live process `ExperimentService.create(spec, executionId)` also returns the existing Job for a duplicate key.
+
+## Write Order
+
+```text
+validate Spec
+  -> persist Ledger PENDING
+  -> persist AgentRun PENDING execution checkpoint
+  -> submit Job with executionId
+  -> persist Ledger RUNNING + jobId
+  -> persist AgentRun RUNNING checkpoint
+  -> await terminal state
+  -> collect validated Artifact + summary
+  -> persist Ledger COMPLETED
+  -> persist AgentRun execution and Observation
+```
+
+The completed Ledger is written before the Observation checkpoint. A crash between those two writes can therefore reconstruct the Observation without submitting another Job.
+
+## Recovery Matrix
+
+| Durable state | Recovery behavior |
 |---|---|
-| 没有 execution record | 首次提交，先写 PENDING checkpoint |
-| RUNNING 且有 jobId | 查询原 Job，不再次 submit |
-| COMPLETED 且已有 Observation | 校验 Artifact 后直接 Verify |
-| Artifact hash/size 不一致 | Grounding 失败，不复用 |
-| status 查询瞬时失败 | 只重试只读查询，受 maxRetries 限制 |
-| timeout | 取消已知 Job，进入 TIMED_OUT |
+| `COMPLETED` + valid Artifact refs | verify path/size/hash/validated and rebuild execution + Observation; do not create a Job |
+| `COMPLETED` + missing/tampered evidence | fail; completion is not trusted |
+| `RUNNING` + known jobId and recoverable Job | continue polling the same Job |
+| `RUNNING` + jobId absent from Job repository | change Ledger to `UNCERTAIN`; do not assume success |
+| `PENDING` or `UNCERTAIN` without jobId | mark/retain `UNCERTAIN`; do not resubmit an ambiguous side effect |
+| confirmed terminal failure/cancel | persist `FAILED`; do not create an Observation |
+| read-only status query transient failure | retry within `maxRetries`; if unresolved, persist `UNCERTAIN` |
 
-任何副作用前先 checkpoint；拿到 jobId 后立即再次 checkpoint。副作用失败不会因存在部分
-文件而被提升为成功。
+`UNCERTAIN` is intentional: at-least-once re-execution would be unsafe when the system cannot prove whether submission crossed the external side-effect boundary. An operator or a future transactional Job repository must reconcile it.
 
-## Trace
+## Artifact Reuse
 
-每次 AgentRun 记录 planning/retrieval/rerank/experiment/verification latency、Dense/Sparse
-候选数、model route/reason、真实可得时的 token usage、replan count、total latency 和终态。
-终态时 trace 同时保存在 AgentRun checkpoint 和 `AGENT_RUN_TRACE` Artifact。
+Artifact reuse does not trust the in-memory registry. `ArtifactRegistry.resolveVerifiedReference` resolves a relative path inside the configured Artifact root, rejects absolute paths and symlinks, and compares regular-file size and SHA-256 with the Ledger reference. Only entries already marked validated are eligible.
 
-## 自动化恢复结果
+## Automated Recovery Coverage
 
-测试把一个已完成 Observe、尚未 Verify 的 AgentRun 改回 `VERIFYING` checkpoint，再调用
-resume。恢复后复用相同 jobId、1 个 ExecutionRecord 和 1 个 Observation，ExperimentJob
-总数没有增加，最终重新进入 `SUCCEEDED`。
+Tests cover:
 
-## 当前限制
+- file Ledger and Artifact verification after constructing fresh repository/registry instances;
+- canonical Spec fingerprints independent of map insertion order;
+- recovery from a completed Ledger before the Observation checkpoint;
+- reuse of the original jobId and Artifact without increasing Job count;
+- ambiguous `PENDING` submission marked `UNCERTAIN` without creating a Job;
+- duplicate in-process execution key returning the same Job.
 
-- File repository 是单机实现，没有分布式锁、lease 或多实例并发恢复。
-- ExperimentJob 与 ArtifactRegistry 的索引本身仍主要在内存；AgentRun 能恢复已 checkpoint
-  的 Observation 并通过落盘 Artifact hash 验证，但尚不能重建任意中断点的完整 Job 状态机。
-- 进程在 Runner 已产生副作用但 jobId checkpoint 尚未落盘的极窄窗口，跨进程无法证明是否
-  已执行；系统不会伪报成功。要消除此窗口，需要把 ExperimentJob/idempotency 映射迁移到
-  同一事务型 JDBC 存储。
+Reproduce with:
+
+```powershell
+mvn -B "-Dtest=ScientificAgentLoopTest,ExecutionLedgerRecoveryTest" test
+```
+
+## Limits
+
+- The file implementation targets one application instance. It has no distributed lease, fencing token or cross-host transaction.
+- The in-memory ExperimentService idempotency map is not itself durable. The Ledger closes completed-execution recovery and blocks ambiguous automatic replay, but it cannot reconcile an external side effect without a durable jobId.
+- Full persistence of all Replay, Eval and ordinary Job runtime state remains outside this core Scientific Agent recovery scope.
+- A production multi-instance deployment should implement the same repository interface with transactional JDBC and an idempotency uniqueness constraint.

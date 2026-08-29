@@ -17,6 +17,11 @@ public class AgentRunTrace {
     private long experimentExecutionLatencyMillis;
     private long verificationLatencyMillis;
     private int replanCount;
+    private int invalidPlanProposalCount;
+    private int invalidExperimentSpecCount;
+    private int invalidToolCallCount;
+    private int recoveredExecutionCount;
+    private int duplicateExecutionCount;
     private long totalLatencyMillis;
     private String finalTaskStatus;
     private List<ModelRoutingDecision> routingDecisions = new ArrayList<>();
@@ -45,6 +50,16 @@ public class AgentRunTrace {
     public void setVerificationLatencyMillis(long value) { verificationLatencyMillis = value; }
     public int getReplanCount() { return replanCount; }
     public void setReplanCount(int value) { replanCount = value; }
+    public int getInvalidPlanProposalCount() { return invalidPlanProposalCount; }
+    public void setInvalidPlanProposalCount(int value) { invalidPlanProposalCount = value; }
+    public int getInvalidExperimentSpecCount() { return invalidExperimentSpecCount; }
+    public void setInvalidExperimentSpecCount(int value) { invalidExperimentSpecCount = value; }
+    public int getInvalidToolCallCount() { return invalidToolCallCount; }
+    public void setInvalidToolCallCount(int value) { invalidToolCallCount = value; }
+    public int getRecoveredExecutionCount() { return recoveredExecutionCount; }
+    public void setRecoveredExecutionCount(int value) { recoveredExecutionCount = value; }
+    public int getDuplicateExecutionCount() { return duplicateExecutionCount; }
+    public void setDuplicateExecutionCount(int value) { duplicateExecutionCount = value; }
     public long getTotalLatencyMillis() { return totalLatencyMillis; }
     public void setTotalLatencyMillis(long value) { totalLatencyMillis = value; }
     public String getFinalTaskStatus() { return finalTaskStatus; }
@@ -63,6 +78,11 @@ public class AgentRunTrace {
     }
     public void addExecutionLatency(long value) { experimentExecutionLatencyMillis += value; }
     public void addVerificationLatency(long value) { verificationLatencyMillis += value; }
+    public void recordInvalidPlanProposal() { invalidPlanProposalCount++; }
+    public void recordInvalidExperimentSpec() { invalidExperimentSpecCount++; }
+    public void recordInvalidToolCall() { invalidToolCallCount++; }
+    public void recordRecoveredExecution() { recoveredExecutionCount++; }
+    public void recordDuplicateExecution() { duplicateExecutionCount++; }
     public void recordRouting(ModelRoutingDecision decision) {
         routingDecisions.add(decision);
         if (decision.modelCall()) modelCalls++;

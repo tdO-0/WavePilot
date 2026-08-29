@@ -12,8 +12,10 @@ public record RetrievalResponse(
         long denseLatencyMillis,
         long sparseLatencyMillis,
         long fusionLatencyMillis,
-        long rerankLatencyMillis) {
+        long rerankLatencyMillis,
+        String rerankerUsed) {
     public RetrievalResponse {
         evidence = evidence == null ? List.of() : List.copyOf(evidence);
+        rerankerUsed = rerankerUsed == null ? "none" : rerankerUsed;
     }
 }

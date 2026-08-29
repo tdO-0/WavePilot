@@ -29,7 +29,8 @@ import java.util.concurrent.ConcurrentMap;
 public class RetrievalEvaluationService {
     private static final List<RetrievalStrategy> STRATEGIES = List.of(
             RetrievalStrategy.DENSE_ONLY, RetrievalStrategy.BM25_ONLY,
-            RetrievalStrategy.HYBRID_RRF, RetrievalStrategy.HYBRID_RRF_RERANK);
+            RetrievalStrategy.HYBRID_RRF, RetrievalStrategy.HYBRID_RRF_DETERMINISTIC_RERANK,
+            RetrievalStrategy.HYBRID_RRF_MODEL_RERANK);
 
     private final RetrievalEvaluationDataset dataset;
     private final WavePilotKnowledgeRepository denseStore;
@@ -63,16 +64,20 @@ public class RetrievalEvaluationService {
                 KnowledgeSearchRequest request = new KnowledgeSearchRequest(evalCase.query(), evalCase.topK(),
                         evalCase.documentTypeFilter(), evalCase.experimentTypeFilter());
                 RetrievalResponse response = retrievalService.search(request, strategy);
-                strategyResults.add(calculator.calculate(evalCase, strategy, response.route().queryType(),
-                        response.evidence()));
+                strategyResults.add(calculator.calculate(evalCase, strategy,
+                        response.route().queryType(), response));
             }
             allResults.addAll(strategyResults);
             metrics.put(strategy, calculator.aggregate(strategyResults));
         }
         String evaluationId = "RAGEVAL-" + UUID.randomUUID().toString().substring(0, 12).toUpperCase();
+        Map<org.example.wavepilot.knowledge.retrieval.QueryType, Integer> typeCounts =
+                new EnumMap<>(org.example.wavepilot.knowledge.retrieval.QueryType.class);
+        dataset.cases().forEach(value -> typeCounts.merge(value.queryType(), 1, Integer::sum));
+        List<RetrievalEvaluationComparison> comparisons = comparisons(metrics);
         RetrievalEvaluationReport report = new RetrievalEvaluationReport(evaluationId, dataset.name(),
-                dataset.cases().size(), dataset.cases().get(0).topK(), Instant.now(), metrics,
-                allResults, "Deterministic offline retrieval software evaluation; not scientific algorithm validation.");
+                dataset.cases().size(), 5, Instant.now(), metrics, allResults, typeCounts, comparisons,
+                "Bilingual offline software retrieval evaluation. The deterministic embedding and model-rerank fallback are not a scientific semantic benchmark.");
         reports.put(evaluationId, report);
         writeArtifacts(report);
         return report;
@@ -91,20 +96,31 @@ public class RetrievalEvaluationService {
                 .append("- Evaluation: `").append(report.evaluationId()).append("`\n")
                 .append("- Dataset: `").append(report.datasetName()).append("`\n")
                 .append("- Cases: ").append(report.caseCount()).append("\n")
+                .append("- Query types: ").append(report.queryTypeCounts()).append("\n")
                 .append("- Disclosure: ").append(report.disclosure()).append("\n\n")
-                .append("| Strategy | Recall@").append(report.topK()).append(" | Precision@")
-                .append(report.topK()).append(" | MRR | nDCG@").append(report.topK())
-                .append(" | Citation Hit Rate |\n")
-                .append("|---|---:|---:|---:|---:|---:|\n");
+                .append("| Strategy | R@1 | R@3 | R@5 | P@3 | P@5 | MRR | nDCG@3 | nDCG@5 | Citation | Hard-neg reject | Avg ms | Rerank ms |\n")
+                .append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n");
         for (RetrievalStrategy strategy : STRATEGIES) {
             RetrievalMetrics value = report.metrics().get(strategy);
             markdown.append("| ").append(strategy).append(" | ")
-                    .append(format(value.recallAtK())).append(" | ")
-                    .append(format(value.precisionAtK())).append(" | ")
+                    .append(format(value.recallAt1())).append(" | ")
+                    .append(format(value.recallAt3())).append(" | ")
+                    .append(format(value.recallAt5())).append(" | ")
+                    .append(format(value.precisionAt3())).append(" | ")
+                    .append(format(value.precisionAt5())).append(" | ")
                     .append(format(value.mrr())).append(" | ")
-                    .append(format(value.ndcgAtK())).append(" | ")
-                    .append(format(value.citationHitRate())).append(" |\n");
+                    .append(format(value.ndcgAt3())).append(" | ")
+                    .append(format(value.ndcgAt5())).append(" | ")
+                    .append(format(value.citationHitRate())).append(" | ")
+                    .append(format(value.hardNegativeRejectionRate())).append(" | ")
+                    .append(format(value.averageLatencyMillis())).append(" | ")
+                    .append(format(value.averageRerankLatencyMillis())).append(" |\n");
         }
+        markdown.append("\n## Baseline vs candidate\n\n");
+        report.comparisons().forEach(comparison -> markdown.append("- ")
+                .append(comparison.baseline()).append(" → ").append(comparison.candidate())
+                .append(": ").append(comparison.metricDeltas()).append(". ")
+                .append(comparison.interpretation()).append('\n'));
         return markdown.toString();
     }
 
@@ -123,6 +139,8 @@ public class RetrievalEvaluationService {
         try {
             artifactRegistry.writeJson(report.evaluationId(), ArtifactType.RETRIEVAL_EVAL_JSON,
                     "retrieval-eval.json", report);
+            artifactRegistry.writeJson(report.evaluationId(), ArtifactType.RETRIEVAL_EVAL_COMPARISON,
+                    "retrieval-eval-comparison.json", report.comparisons());
             Path markdown = artifactRegistry.createJobDirectory(report.evaluationId())
                     .resolve("retrieval-eval.md");
             Files.writeString(markdown, renderMarkdown(report), StandardCharsets.UTF_8);
@@ -134,5 +152,43 @@ public class RetrievalEvaluationService {
 
     private String format(double value) {
         return String.format(java.util.Locale.ROOT, "%.6f", value);
+    }
+
+    private List<RetrievalEvaluationComparison> comparisons(
+            Map<RetrievalStrategy, RetrievalMetrics> metrics) {
+        return List.of(compare(metrics, RetrievalStrategy.DENSE_ONLY, RetrievalStrategy.HYBRID_RRF),
+                compare(metrics, RetrievalStrategy.HYBRID_RRF,
+                        RetrievalStrategy.HYBRID_RRF_DETERMINISTIC_RERANK),
+                compare(metrics, RetrievalStrategy.HYBRID_RRF_DETERMINISTIC_RERANK,
+                        RetrievalStrategy.HYBRID_RRF_MODEL_RERANK));
+    }
+
+    private RetrievalEvaluationComparison compare(Map<RetrievalStrategy, RetrievalMetrics> metrics,
+                                                   RetrievalStrategy baseline,
+                                                   RetrievalStrategy candidate) {
+        RetrievalMetrics before = metrics.get(baseline);
+        RetrievalMetrics after = metrics.get(candidate);
+        Map<String, Double> deltas = new LinkedHashMap<>();
+        deltas.put("recallAt1", after.recallAt1() - before.recallAt1());
+        deltas.put("recallAt3", after.recallAt3() - before.recallAt3());
+        deltas.put("recallAt5", after.recallAt5() - before.recallAt5());
+        deltas.put("precisionAt3", after.precisionAt3() - before.precisionAt3());
+        deltas.put("precisionAt5", after.precisionAt5() - before.precisionAt5());
+        deltas.put("mrr", after.mrr() - before.mrr());
+        deltas.put("ndcgAt3", after.ndcgAt3() - before.ndcgAt3());
+        deltas.put("ndcgAt5", after.ndcgAt5() - before.ndcgAt5());
+        deltas.put("citationHitRate", after.citationHitRate() - before.citationHitRate());
+        deltas.put("hardNegativeRejectionRate",
+                after.hardNegativeRejectionRate() - before.hardNegativeRejectionRate());
+        deltas.put("averageLatencyMillis",
+                after.averageLatencyMillis() - before.averageLatencyMillis());
+        deltas.put("averageRerankLatencyMillis",
+                after.averageRerankLatencyMillis() - before.averageRerankLatencyMillis());
+        boolean improved = deltas.entrySet().stream()
+                .filter(entry -> !entry.getKey().contains("Latency"))
+                .anyMatch(entry -> entry.getValue() > 1.0e-12);
+        return new RetrievalEvaluationComparison(baseline, candidate, deltas, improved,
+                improved ? "At least one measured metric improved; inspect negative deltas and make no overall or causal claim."
+                        : "No measured quality improvement on this dataset; retain as an engineering comparison.");
     }
 }

@@ -34,9 +34,10 @@ public class HybridRetrievalService {
 
     public RetrievalResponse search(KnowledgeSearchRequest original, RetrievalStrategy strategy) {
         QueryRoute routed = queryRouter.route(original);
-        QueryRoute route = new QueryRoute(routed.queryType(), routed.documentType(), routed.experimentType(),
-                strategy, routed.denseCandidateK(), routed.sparseCandidateK(), routed.topK(),
-                strategy == RetrievalStrategy.HYBRID_RRF_RERANK, routed.reason());
+        QueryRoute route = new QueryRoute(routed.queryType(), routed.documentType(),
+                routed.primaryDocumentType(), routed.fallbackDocumentTypes(), routed.primaryDocumentBoost(),
+                routed.experimentType(), strategy, routed.denseCandidateK(), routed.sparseCandidateK(),
+                routed.topK(), usesReranker(strategy), routed.reason());
         KnowledgeSearchRequest filtered = new KnowledgeSearchRequest(original.query(), null,
                 route.documentType(), route.experimentType());
 
@@ -57,18 +58,22 @@ public class HybridRetrievalService {
 
         long fusionStarted = System.nanoTime();
         List<RetrievalCandidate> ranked = switch (strategy) {
-            case DENSE_ONLY -> normalized(dense, "DENSE");
-            case BM25_ONLY -> normalized(sparse, "BM25");
-            case HYBRID_RRF, HYBRID_RRF_RERANK -> reciprocalRankFusion(dense, sparse);
+            case DENSE_ONLY -> normalized(dense, "DENSE", route);
+            case BM25_ONLY -> normalized(sparse, "BM25", route);
+            case HYBRID_RRF, HYBRID_RRF_RERANK, HYBRID_RRF_DETERMINISTIC_RERANK,
+                    HYBRID_RRF_MODEL_RERANK -> reciprocalRankFusion(dense, sparse, route);
         };
         long fusionMillis = elapsedMillis(fusionStarted);
 
         long rerankMillis = 0;
-        if (strategy == RetrievalStrategy.HYBRID_RRF_RERANK) {
+        String rerankerUsed = "none";
+        if (usesReranker(strategy)) {
+            DocumentReranker reranker = selectedReranker(strategy);
             long started = System.nanoTime();
-            ranked = selectedReranker().rerank(original.query(), ranked);
+            ranked = reranker.rerank(original.query(), ranked);
             rerankMillis = elapsedMillis(started);
-            String method = "HYBRID_RRF+" + selectedReranker().name().toUpperCase(java.util.Locale.ROOT);
+            rerankerUsed = reranker.lastMode();
+            String method = "HYBRID_RRF+" + rerankerUsed.toUpperCase(java.util.Locale.ROOT);
             ranked = ranked.stream().map(candidate -> new RetrievalCandidate(
                     candidate.evidence().withScoreAndMethod(candidate.rawScore(), method),
                     candidate.rawScore())).toList();
@@ -76,22 +81,26 @@ public class HybridRetrievalService {
         List<KnowledgeSearchResult> evidence = ranked.stream().limit(route.topK())
                 .map(RetrievalCandidate::evidence).toList();
         return new RetrievalResponse(route, evidence, dense.size(), sparse.size(), denseMillis,
-                sparseMillis, fusionMillis, rerankMillis);
+                sparseMillis, fusionMillis, rerankMillis, rerankerUsed);
     }
 
-    private List<RetrievalCandidate> normalized(List<RetrievalCandidate> candidates, String method) {
+    private List<RetrievalCandidate> normalized(List<RetrievalCandidate> candidates, String method,
+                                                QueryRoute route) {
         return candidates.stream().map(candidate -> new RetrievalCandidate(
-                        candidate.evidence().withScoreAndMethod(candidate.rawScore(), method),
-                        candidate.rawScore()))
+                        candidate.evidence().withScoreAndMethod(boosted(candidate, route), method),
+                        boosted(candidate, route)))
+                .sorted(Comparator.comparingDouble(RetrievalCandidate::rawScore).reversed()
+                        .thenComparing(candidate -> candidate.evidence().chunkId()))
                 .toList();
     }
 
     /** RRF combines ranks only; dense similarity and BM25 scores are never linearly mixed. */
     private List<RetrievalCandidate> reciprocalRankFusion(List<RetrievalCandidate> dense,
-                                                          List<RetrievalCandidate> sparse) {
+                                                          List<RetrievalCandidate> sparse,
+                                                          QueryRoute route) {
         Map<String, Fused> fused = new LinkedHashMap<>();
-        addRanks(fused, dense);
-        addRanks(fused, sparse);
+        addRanks(fused, dense, route);
+        addRanks(fused, sparse, route);
         return fused.values().stream()
                 .map(value -> new RetrievalCandidate(
                         value.evidence.withScoreAndMethod(value.score, "HYBRID_RRF"), value.score))
@@ -100,22 +109,45 @@ public class HybridRetrievalService {
                 .toList();
     }
 
-    private void addRanks(Map<String, Fused> fused, List<RetrievalCandidate> ranked) {
+    private void addRanks(Map<String, Fused> fused, List<RetrievalCandidate> ranked, QueryRoute route) {
         for (int index = 0; index < ranked.size(); index++) {
             RetrievalCandidate candidate = ranked.get(index);
             double contribution = 1.0 / (properties.getRrfK() + index + 1.0);
+            if (!route.explicitDocumentFilter()
+                    && candidate.evidence().documentType() == route.primaryDocumentType()) {
+                contribution *= route.primaryDocumentBoost();
+            }
+            double rankContribution = contribution;
             fused.compute(candidate.evidence().chunkId(), (id, existing) -> existing == null
-                    ? new Fused(candidate.evidence(), contribution)
-                    : new Fused(existing.evidence, existing.score + contribution));
+                    ? new Fused(candidate.evidence(), rankContribution)
+                    : new Fused(existing.evidence, existing.score + rankContribution));
         }
     }
 
-    private DocumentReranker selectedReranker() {
-        String selected = properties.getReranker();
+    private DocumentReranker selectedReranker(RetrievalStrategy strategy) {
+        String selected = switch (strategy) {
+            case HYBRID_RRF_DETERMINISTIC_RERANK -> "deterministic";
+            case HYBRID_RRF_MODEL_RERANK -> "model";
+            default -> properties.getReranker();
+        };
         return rerankers.stream().filter(reranker -> reranker.name().equalsIgnoreCase(selected))
                 .findFirst().orElseGet(() -> rerankers.stream()
-                        .filter(reranker -> reranker.name().equals("noop")).findFirst()
+                        .filter(reranker -> reranker.name().equals("deterministic")).findFirst()
+                        .or(() -> rerankers.stream().filter(reranker -> reranker.name().equals("noop")).findFirst())
                         .orElseThrow(() -> new IllegalStateException("No document reranker is configured")));
+    }
+
+    private boolean usesReranker(RetrievalStrategy strategy) {
+        return strategy == RetrievalStrategy.HYBRID_RRF_RERANK
+                || strategy == RetrievalStrategy.HYBRID_RRF_DETERMINISTIC_RERANK
+                || strategy == RetrievalStrategy.HYBRID_RRF_MODEL_RERANK;
+    }
+
+    private double boosted(RetrievalCandidate candidate, QueryRoute route) {
+        return !route.explicitDocumentFilter()
+                && candidate.evidence().documentType() == route.primaryDocumentType()
+                ? candidate.rawScore() * route.primaryDocumentBoost()
+                : candidate.rawScore();
     }
 
     private long elapsedMillis(long startedNanos) {

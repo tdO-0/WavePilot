@@ -78,7 +78,9 @@ wavepilot:
       sparse-candidate-k: ${WAVEPILOT_SPARSE_CANDIDATE_K:20}
       result-top-k: ${WAVEPILOT_HYBRID_TOP_K:5}
       rrf-k: ${WAVEPILOT_RRF_K:60}
+      routing-boost: ${WAVEPILOT_ROUTING_BOOST:1.08}
       reranker: ${WAVEPILOT_RERANKER:deterministic}
+      model-reranker-enabled: ${WAVEPILOT_MODEL_RERANKER_ENABLED:false}
   embedding:
     # true = deterministic offline vectors (no DashScope); for offline demos/tests only
     offline: ${WAVEPILOT_EMBEDDING_OFFLINE:false}
@@ -87,5 +89,8 @@ wavepilot:
     job-wait-timeout-millis: ${WAVEPILOT_EVAL_JOB_WAIT_MILLIS:10000}
   scientific:
     run-store: ${WAVEPILOT_AGENT_RUN_STORE:data/wavepilot/agent-runs}
+    execution-ledger-store: ${WAVEPILOT_EXECUTION_LEDGER_STORE:data/wavepilot/execution-ledger}
+    planner-mode: ${WAVEPILOT_SCIENTIFIC_PLANNER_MODE:deterministic}
+    replanner-mode: ${WAVEPILOT_SCIENTIFIC_REPLANNER_MODE:deterministic}
   spec:
     default-random-seed: 20

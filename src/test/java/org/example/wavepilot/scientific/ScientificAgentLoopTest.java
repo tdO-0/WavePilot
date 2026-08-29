@@ -14,6 +14,10 @@ import org.example.wavepilot.scientific.model.ParameterBounds;
 import org.example.wavepilot.scientific.model.ReplanDecision;
 import org.example.wavepilot.scientific.model.RunBudget;
 import org.example.wavepilot.scientific.model.ScientificCapability;
+import org.example.wavepilot.scientific.ledger.ExecutionLedgerEntry;
+import org.example.wavepilot.scientific.ledger.ExecutionLedgerRepository;
+import org.example.wavepilot.scientific.ledger.ExecutionLedgerStatus;
+import org.example.wavepilot.scientific.ledger.ExperimentSpecFingerprint;
 import org.example.wavepilot.scientific.repository.AgentRunRepository;
 import org.example.wavepilot.scientific.service.BoundedScientificReplanner;
 import org.example.wavepilot.scientific.service.ScientificAgentService;
@@ -23,6 +27,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.TestPropertySource;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -37,13 +42,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "wavepilot.embedding.offline=true",
         "wavepilot.runner.type=mock",
         "wavepilot.artifacts.root=target/scientific-agent-artifacts",
-        "wavepilot.scientific.run-store=target/scientific-agent-runs"
+        "wavepilot.scientific.run-store=target/scientific-agent-runs",
+        "wavepilot.scientific.execution-ledger-store=target/scientific-agent-ledger"
 })
 class ScientificAgentLoopTest {
     @Autowired ScientificAgentService agentService;
     @Autowired ExperimentService experimentService;
     @Autowired AgentRunRepository runRepository;
     @Autowired BoundedScientificReplanner replanner;
+    @Autowired ExecutionLedgerRepository executionLedger;
+    @Autowired ExperimentSpecFingerprint fingerprint;
 
     @Test
     void mockRunnerCompletesPlanExecuteVerifyReplanLoopOffline() {
@@ -131,6 +139,55 @@ class ScientificAgentLoopTest {
     }
 
     @Test
+    void resumeFromPreObservationCheckpointUsesCompletedLedgerWithoutDuplicateJob() {
+        AgentRun completed = agentService.start(goal("GOAL-LEDGER-RECOVERY", spec(0, .1), .70,
+                new RunBudget(2, 2, 0, 0, 1, Duration.ofMinutes(1))));
+        assertEquals(AgentRunState.SUCCEEDED, completed.getState());
+        int jobsBefore = experimentService.list().size();
+        String originalJob = completed.getExecutions().get(0).jobId();
+        String retrieveStep = completed.getCurrentPlan().steps().stream()
+                .filter(step -> step.capability() == ScientificCapability.RETRIEVE_EVIDENCE)
+                .findFirst().orElseThrow().stepId();
+
+        completed.setState(AgentRunState.EXECUTING);
+        completed.setTerminalReason(null);
+        completed.setCompletedSteps(List.of(retrieveStep));
+        completed.setExecutions(List.of());
+        completed.setObservations(List.of());
+        completed.setVerificationResults(List.of());
+        runRepository.save(completed);
+
+        AgentRun recovered = agentService.resume(completed.getRunId());
+
+        assertEquals(AgentRunState.SUCCEEDED, recovered.getState());
+        assertEquals(jobsBefore, experimentService.list().size());
+        assertEquals(originalJob, recovered.getExecutions().get(0).jobId());
+        assertTrue(recovered.getExecutions().get(0).reused());
+        assertEquals(1, recovered.getTrace().getRecoveredExecutionCount());
+        assertTrue(recovered.getObservations().get(0).deterministicResultValidationPassed());
+    }
+
+    @Test
+    void ambiguousPendingSubmissionIsNotExecutedAgainAfterRestart() {
+        AgentRun checkpoint = agentService.createCheckpoint(goal("GOAL-UNCERTAIN", spec(0, .1), .70,
+                new RunBudget(2, 2, 0, 0, 1, Duration.ofMinutes(1))));
+        String executionId = "EXEC-" + checkpoint.getRunId().substring(4) + "-I1";
+        executionLedger.save(new ExecutionLedgerEntry(executionId, checkpoint.getRunId(), null,
+                fingerprint.sha256(checkpoint.getCurrentSpec()), ExecutionLedgerStatus.PENDING,
+                List.of(), Map.of(), 0, Instant.now(), null, null));
+        int jobsBefore = experimentService.list().size();
+
+        AgentRun recovered = agentService.resume(checkpoint.getRunId());
+
+        assertEquals(AgentRunState.FAILED, recovered.getState());
+        assertEquals(jobsBefore, experimentService.list().size());
+        assertEquals(0, recovered.getExperimentCount());
+        assertEquals(ExecutionLedgerStatus.UNCERTAIN,
+                executionLedger.findByExecutionId(executionId).orElseThrow().currentStatus());
+        assertTrue(recovered.getTerminalReason().contains("cannot be repeated safely"));
+    }
+
+    @Test
     void replannerNeverCrossesDeclaredParameterBoundary() {
         ExperimentSpec current = spec(.20, .30);
         ExperimentGoal goal = new ExperimentGoal("GOAL-BOUNDS", "bounded replan", current,
@@ -147,6 +204,24 @@ class ScientificAgentLoopTest {
         assertEquals(.25, decision.nextSpec().errorRateEnd(), 1.0e-12);
         assertTrue(replanner.withinBounds(decision.nextSpec(), goal.parameterBounds()));
         assertTrue(replanner.withinBounds(current, goal.parameterBounds()));
+    }
+
+    @Test
+    void semanticReplanCannotChangeUnregisteredStructuralFields() {
+        ExperimentSpec current = spec(0, .1);
+        ExperimentSpec changedSeed = new ExperimentSpec(current.experimentType(), current.codeLengths(),
+                current.errorRateStart(), .2, current.errorRateStep(), current.sampleCount(),
+                current.monteCarloTimes(), 999, current.outputTypes(), current.description(),
+                current.experimentTypeId(), current.customParameters());
+        Map<String, ParameterBounds> bounds = Map.of(
+                "errorRateEnd", new ParameterBounds(.05, .5, .1));
+
+        assertFalse(replanner.changesOnlyBoundedParameters(current, changedSeed, bounds));
+        ExperimentSpec onlyBoundedChange = new ExperimentSpec(current.experimentType(), current.codeLengths(),
+                current.errorRateStart(), .2, current.errorRateStep(), current.sampleCount(),
+                current.monteCarloTimes(), current.randomSeed(), current.outputTypes(), current.description(),
+                current.experimentTypeId(), current.customParameters());
+        assertTrue(replanner.changesOnlyBoundedParameters(current, onlyBoundedChange, bounds));
     }
 
     private ExperimentGoal goal(String id, ExperimentSpec spec, double target, RunBudget budget) {

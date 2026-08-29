@@ -8,10 +8,12 @@ public record AgentRegressionEvaluationReport(
         String agentRunId,
         String retrievalEvaluationId,
         String replayId,
+        AgentEvaluationProfile profile,
         List<AgentEvaluationResult> results,
         long passed,
         int total,
         double successRate,
+        AgentEvaluationTelemetry telemetry,
         Instant evaluatedAt,
         String disclosure) {
     public AgentRegressionEvaluationReport {

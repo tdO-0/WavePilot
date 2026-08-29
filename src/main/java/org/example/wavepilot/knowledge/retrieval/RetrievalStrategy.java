@@ -4,5 +4,8 @@ public enum RetrievalStrategy {
     DENSE_ONLY,
     BM25_ONLY,
     HYBRID_RRF,
-    HYBRID_RRF_RERANK
+    /** Backward-compatible configured reranker. */
+    HYBRID_RRF_RERANK,
+    HYBRID_RRF_DETERMINISTIC_RERANK,
+    HYBRID_RRF_MODEL_RERANK
 }

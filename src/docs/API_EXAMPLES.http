@@ -233,5 +233,15 @@ Content-Type: application/json
 {
   "runId": "RUN-XXXXXXXX-XXX",
   "retrievalEvaluationId": "RAGEVAL-XXXXXXXX-XXX",
-  "replayId": "REPLAY-XXXXXXXX-XXX"
+  "replayId": "REPLAY-XXXXXXXX-XXX",
+  "profile": "CANDIDATE"
+}
+
+### Compare Agent regression baseline and candidate reports
+POST {{baseUrl}}/api/agent-regression-evaluations/compare
+Content-Type: application/json
+
+{
+  "baselineEvaluationId": "AGENTEVAL-XXXXXXXX-XXX",
+  "candidateEvaluationId": "AGENTEVAL-YYYYYYYY-YYY"
 }

@@ -2,7 +2,6 @@ package org.example.wavepilot.knowledge.retrieval;
 
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
-import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
@@ -28,7 +27,6 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -41,7 +39,7 @@ public class LuceneBm25SparseRetriever implements SparseRetriever, AutoCloseable
     private static final String EXPERIMENT_TYPE = "experimentType";
     private static final String CONTENT = "content";
 
-    private final Analyzer analyzer = new StandardAnalyzer();
+    private final Analyzer analyzer = new CommunicationDomainAnalyzer();
     private final ByteBuffersDirectory directory = new ByteBuffersDirectory();
     private final IndexWriter writer;
     private final ConcurrentMap<String, KnowledgeChunk> catalog = new ConcurrentHashMap<>();
@@ -91,7 +89,7 @@ public class LuceneBm25SparseRetriever implements SparseRetriever, AutoCloseable
         }
         try (DirectoryReader reader = DirectoryReader.open(writer)) {
             BooleanQuery.Builder query = new BooleanQuery.Builder();
-            List<String> terms = analyze(request.query());
+            List<String> terms = analyzeTerms(request.query());
             for (String term : terms) {
                 query.add(new TermQuery(new Term(CONTENT, term)), BooleanClause.Occur.SHOULD);
             }
@@ -123,10 +121,10 @@ public class LuceneBm25SparseRetriever implements SparseRetriever, AutoCloseable
         }
     }
 
-    private List<String> analyze(String value) throws IOException {
+    public List<String> analyzeTerms(String value) throws IOException {
         List<String> terms = new ArrayList<>();
         try (TokenStream stream = analyzer.tokenStream(CONTENT,
-                new StringReader(value.toLowerCase(Locale.ROOT)))) {
+                new StringReader(value))) {
             CharTermAttribute term = stream.addAttribute(CharTermAttribute.class);
             stream.reset();
             while (stream.incrementToken()) terms.add(term.toString());
