@@ -20,6 +20,41 @@ Natural language
           -> ResultValidator -> ArtifactRegistry
 ```
 
+## Scientific Agent runtime
+
+```text
+ExperimentGoal + RunBudget + ParameterBounds
+  -> ScientificPlanner (registered capabilities only; no code field)
+  -> QueryRouter
+       -> DenseRetriever (Milvus or in-memory)
+       -> LuceneBm25SparseRetriever
+       -> Reciprocal Rank Fusion (rank-only)
+       -> DocumentReranker (deterministic default, optional model adapter)
+  -> ExperimentService.create(spec, executionId)
+       -> ExperimentSpecValidator
+       -> existing ExperimentRunner and ResultValidator
+  -> Observation (validated Artifact snapshots + grounded summary metrics)
+  -> ScientificVerifier
+       -> artifact completeness/hash/size
+       -> goal constraint
+       -> grounding
+  -> BoundedScientificReplanner or terminal AgentRunState
+  -> FileAgentRunRepository checkpoint + AgentRunTrace artifact
+```
+
+`ScientificAgentService` is an orchestrator inside the existing monolith, not a new execution
+service. It cannot call `ExperimentRunner` directly. Every side-effect step has an executionId
+used as the `ExperimentService` idempotency key. Side-effect-free planning/retrieval/verification
+may be repeated during recovery.
+
+## Hybrid retrieval runtime
+
+The checked versions are Milvus Server `2.5.10` in `vector-database.yml` and Java SDK `2.6.10`
+in `pom.xml`. To avoid treating version-misaligned sparse APIs as a stable contract, Milvus
+remains the dense store and Apache Lucene 9.12.1 supplies BM25. `KnowledgeChunk.chunkId` is the
+join key; title, section, experiment type, content, source and metadata remain attached to the
+same evidence object through fusion/rerank.
+
 ## Trust boundaries
 
 1. LLM output is untrusted. It must be deserialized and then accepted by `ExperimentSpecValidator`.
@@ -31,6 +66,9 @@ Natural language
 7. `ProcessBuilder` receives a fixed `-batch` entrypoint. The user description and all `ExperimentSpec` fields are serialized to `matlab-input.json`, never interpolated into the command.
 8. The runner copies one classpath-owned template selected from a two-entry Java whitelist into the isolated job directory and does not accept a user script path or MATLAB expression.
 9. A zero MATLAB exit code is insufficient by itself: `ResultValidator` checks the complete CSV grid, numeric ranges, summary consistency, explicit `mock`, and MAT/PNG signatures before the job becomes `SUCCEEDED`.
+10. Scientific plans contain only `ScientificCapability` values. Execution steps still pass through `ExperimentService.parseAndValidate/create`; Planner and Replanner cannot authorize execution.
+11. Replan is bounded by iteration/experiment/model/token/time budgets and per-parameter limits. No loop state can bypass a terminal budget state.
+12. Recovery reuses a completed Observation only after Artifact hash/size validation; an unconfirmed in-flight side effect is never reported as successful.
 
 ## Controllers
 
@@ -40,6 +78,9 @@ Natural language
 | `ExperimentSpecParseController` | Natural-language Spec extraction and clarification |
 | `KnowledgeController` | Communication document upload and filtered search |
 | `ExperimentController` | Structured Spec validation and experiment lifecycle |
+| `ScientificAgentController` | create/checkpoint/resume/query durable Scientific Agent runs |
+| `RetrievalEvaluationController` | execute and read reproducible hybrid retrieval reports |
+| `AgentRegressionEvaluationController` | evaluate and compare actual Agent/RAG/Replay records |
 
 The application exposes only WavePilot controllers and controlled experiment workflows.
 
@@ -52,7 +93,7 @@ The application exposes only WavePilot controllers and controlled experiment wor
 - Mock: the default runner still generates synthetic CSV/summary/log for offline platform tests.
 - External: natural-language model calls require DashScope; production knowledge indexing/search requires Milvus.
 - Offline tests: use Fake extraction models and an in-memory vector repository; no external services are contacted.
-- Not implemented: MCP MATLAB Runner, MySQL persistence, real-model external Eval.
+- Not implemented: MCP MATLAB Runner, distributed/JDBC execution persistence, native Milvus sparse retrieval, real-model external Eval.
 
 ## Phase 5 chain (5A-5E)
 

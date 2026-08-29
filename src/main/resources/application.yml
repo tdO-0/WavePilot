@@ -73,11 +73,19 @@ wavepilot:
   knowledge:
     repository: ${WAVEPILOT_KNOWLEDGE_REPOSITORY:milvus}
     collection: wavepilot_knowledge_v1
+    hybrid:
+      dense-candidate-k: ${WAVEPILOT_DENSE_CANDIDATE_K:20}
+      sparse-candidate-k: ${WAVEPILOT_SPARSE_CANDIDATE_K:20}
+      result-top-k: ${WAVEPILOT_HYBRID_TOP_K:5}
+      rrf-k: ${WAVEPILOT_RRF_K:60}
+      reranker: ${WAVEPILOT_RERANKER:deterministic}
   embedding:
     # true = deterministic offline vectors (no DashScope); for offline demos/tests only
     offline: ${WAVEPILOT_EMBEDDING_OFFLINE:false}
   evaluation:
     # wait limit for Job/Replay eval cases; raise it for a real MATLAB runner (minutes)
     job-wait-timeout-millis: ${WAVEPILOT_EVAL_JOB_WAIT_MILLIS:10000}
+  scientific:
+    run-store: ${WAVEPILOT_AGENT_RUN_STORE:data/wavepilot/agent-runs}
   spec:
     default-random-seed: 20

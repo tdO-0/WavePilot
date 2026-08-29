@@ -1,51 +1,69 @@
-# WavePilot 最终实现报告
+# WavePilot 架构升级最终实现报告
 
-更新时间：2026-08-06
+更新时间：2026-08-30
 
-## 已真实实现（Java 确定性代码）
+## 实际修改的架构
 
-- Java 参数校验：`ExperimentSpecValidator`（码长 2 的幂、错误率范围、资源风险警告）。
-- 状态机：`ExperimentStateMachine`（CREATED→VALIDATED→QUEUED→RUNNING→VALIDATING_RESULT→SUCCEEDED/FAILED/CANCELLED）。
-- 异步任务：`ExperimentService` 线程池编排，Runner 轮询、取消、失败登记。
-- SSE：`/api/experiments/{jobId}/stream` 实时进度事件。
-- Artifact：`ArtifactRegistry` 登记、SHA-256、大小、MIME、相对路径、穿越/符号链接拒绝、verify/resolveVerified。
-- Citation：`ArtifactCitation` 定位 Artifact SHA-256、CSV 行/字段、JSON 字段原值；跨 Job、篡改、未验证产物拒绝。
-- 模板报告：`TemplateExperimentReportGenerator` 生成不依赖模型的 JSON/Markdown 报告；`ReportDataAssembler` 从已验证 CSV/summary 计算 min/max/mean 并交叉校验。
-- Local MATLAB Runner：`LocalMatlabExperimentRunner` 只运行版本化固定模板，JSON 传参，进程树超时/取消、日志与 CSV/MAT/PNG/summary 产物；`ResultValidator` 校验 MAT/PNG 签名与结构化一致性。
-- Replay：`ReplayService` 独立新 Job、确定性 Fingerprint、结构化比较、REPRODUCIBLE 判定、REPLAY_MANIFEST/REPLAY_COMPARISON 产物。
-- 离线 Eval：24 个固定 Case、11 项指标由执行结果计算、Baseline/Candidate 配对比较、逐 Case 结果保留。
-- external-eval profile：`ExternalEvaluationModel` 走真实 DashScope `ExperimentSpecParser` 执行 Spec 类 Case，未覆盖 Case 显式记录 NOT_COVERED；未运行时不得声称真实模型 Eval 通过。
-- 前端工作台：静态三栏页面，完整闭环展示与操作（见 FRONTEND_GUIDE.md）。
+1. 在现有 `ExperimentSpec + ExperimentService + ExperimentRunner` 之上增加受控 Scientific Agent 状态闭环：Goal → Plan → Retrieve → Execute → Observe → Verify → Replan/Finish。
+2. 增加文件型 `AgentRunRepository`、原子 checkpoint、executionId/idempotency、只读状态重试、timeout、Artifact 恢复验证和终态 Trace。
+3. 保留 Milvus Dense，引入 Apache Lucene 9.12.1 BM25；QueryRouter、Dense/Sparse Retriever、RRF 与 DocumentReranker 分层，统一 chunkId 并保留 provenance。
+4. 增加独立 Retrieval Eval 和 Agent Regression Eval；JSON/Markdown 与比较报告都来自实际运行。
+5. 增加 ModelRouter，记录 deterministic/fallback/model route 与 reason；provider 未返回 token usage 时字段为 null。
 
-## Mock/Fake（明确标注，不冒充真实）
+## 依赖与 fallback
 
-- 默认测试模型：`ReferenceStubModel`（stub-v1）/ `RegressedStubModel`（stub-v2）脚本化模型，缺陷是脚本化行为。
-- 默认知识库：内存 Repository + 确定性 Embedding，仅离线测试。
-- Mock Runner：`MockExperimentRunner` 生成确定性数值与 3 列 CSV，只验证软件闭环。
-- 离线 Eval Agent：stub 模型；平台侧执行器全部真实。
+- Compose Milvus Server：2.5.10；Milvus Java SDK：2.6.10。
+- 因 Server/SDK 未对齐，没有把原生 Sparse/Hybrid 当成稳定契约；fallback 为 Milvus Dense + 进程内 Lucene BM25，而不是 Elasticsearch。
+- 新增 `lucene-core` 与 `lucene-analysis-common` 9.12.1，只用于 BM25 索引/分析。
+- Rerank 默认 deterministic；可选模型端口存在但默认不调用外部模型。
 
-## 需要外部环境（profile 显式启用，未运行时不得声称通过）
+## 安全与执行边界
 
-- DashScope：`dashscope-smoke`（三项最小 smoke 已就绪，真实运行延至最终演示前）。
-- 真实 Milvus：`milvus-smoke`。
-- MATLAB smoke：`matlab-smoke`。
-- full-demo：`full-demo`（Milvus + DashScope + MATLAB + 前端）。
+- Planner 的计划只有 `ScientificCapability`，无代码/命令/Runner/脚本路径。
+- 每次实验仍由 `ExperimentService` 再次调用 Java Validator，复用原 Runner 与 ResultValidator。
+- Replanner 提案先受 per-parameter 范围与单次变化限制，再过 Java Validator。
+- Verifier 检查 Artifact 齐全、validated、SHA-256/大小、summary metric Grounding 与 Goal 约束。
+- iteration、experiment、model call、token、retry 和 timeout 都有硬预算；预算耗尽是明确终态。
 
-## 算法边界（不可夸大）
+## 最终自动化结果
 
-- `mock=false` 只代表真实 MATLAB Runner 进程执行。
-- `classification=SIMPLIFIED_BASELINE`：简化业务基线，不是论文复现或创新算法。
-- `algorithmValidated=false`：没有科研性能验证。
-- Replay 一致、报告生成、Eval 通过都不构成算法科研结论。
+`mvn -B test`：375 Tests、375 Success、0 Failures、0 Errors、0 Skipped，`BUILD SUCCESS`。
 
-## 当前持久化限制
+目标仓库升级前基线同一命令为 363/363 通过。新增 12 项测试后全量无 regression；原 Replay、Report、Template、Frontend、安全边界与 Experiment 测试均仍通过。
 
-- Job/Replay/Eval Repository 均为内存实现，应用重启后任务元数据可能丢失。
-- Artifact 文件保存在磁盘（`wavepilot.artifacts.root`）。
-- 未实现 MySQL 或任何关系型持久化；不得描述为已完成 MySQL 持久化。
+## Retrieval Eval 实际结果
 
-## 验证结果
+数据集 `wavepilot-hybrid-retrieval-v1`，6 Case，Top-3：
 
-- 默认离线套件 182 项全部通过（Java 17 编译目标；本机 Windows 实测 `mvn -B clean test` BUILD SUCCESS）。
-- Docker Eclipse Temurin 17.0.15 复验为 Phase 5F 的待办记录项。
-- 没有 GitHub 远端；GitHub Actions 仍为已配置、无真实 run。
+| Strategy | Recall@3 | Precision@3 | MRR | nDCG@3 | Citation Hit Rate |
+|---|---:|---:|---:|---:|---:|
+| Dense Only | 1.000000 | 0.333333 | 1.000000 | 1.000000 | 1.000000 |
+| BM25 Only | 1.000000 | 0.333333 | 1.000000 | 1.000000 | 1.000000 |
+| Hybrid RRF | 1.000000 | 0.333333 | 1.000000 | 1.000000 | 1.000000 |
+| Hybrid RRF + Rerank | 1.000000 | 0.333333 | 1.000000 | 1.000000 | 1.000000 |
+
+四路在小型精确匹配语料上打平，不能声称 Hybrid 提升效果。
+
+## Scientific Agent / Recovery 实际结果
+
+- Mock 阈值搜索：3 iterations、3 experiments、2 replans，最终 `SUCCEEDED`，grounded `averageAccuracy=0.898440`。
+- Budget case：不可能目标在 1 iteration / 1 experiment 后进入 `BUDGET_EXHAUSTED`。
+- 幂等 case：相同 execution key 两次创建只产生 1 个 ExperimentJob。
+- Recovery case：Observe 后 checkpoint 恢复复用原 jobId、1 个 ExecutionRecord、1 个 Observation，ExperimentJob 总数不增加，最终 `SUCCEEDED`。
+- Agent Regression：实际 AgentRun + Retrieval Eval + ReplayRecord 的 9/9 维度通过；相同记录的 Baseline/Candidate 比较无退化。
+
+## 仍未实现
+
+- 分布式锁、lease、跨实例 exactly-once；
+- JDBC/H2 对 ExperimentJob、Replay、Eval、ArtifactRegistry 索引的整体事务恢复；
+- Lucene 索引跨重启持久化/自动从 Milvus 全量重建；
+- Milvus 原生 Sparse/Hybrid（待 Server/SDK 对齐后验证）；
+- 默认可用的真实模型 Reranker 与真实 token/cost 采集；
+- MATLAB MCP Runner、真实模型 External Eval、本次升级后的真实 MATLAB 科研 benchmark；
+- Scientific Agent 专用前端面板（API 已实现，现有工作台未扩展该视图）。
+
+## 可安全使用的表述
+
+可以写：受控 Scientific Agent 闭环、Java Validator 不可绕过、Mock 离线自动化、Dense+Lucene BM25+RRF、Citation provenance、可恢复 AgentRun checkpoint、幂等测试、375 项测试通过，以及上述 6-Case 检索评测的精确数字并注明数据集范围。
+
+不可以写：真实通信算法准确率 0.898440、Hybrid 优于 Dense/BM25、真实 MATLAB 科研性能、生产级分布式 exactly-once、真实模型成本降低、Milvus 原生 Hybrid 已验证。Mock/Eval/Replay 只证明软件链路与可复现性，不证明科研算法正确性或效果。

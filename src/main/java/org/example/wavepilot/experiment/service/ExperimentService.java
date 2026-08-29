@@ -35,6 +35,8 @@ import java.util.NoSuchElementException;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 @Service
 public class ExperimentService {
@@ -50,6 +52,7 @@ public class ExperimentService {
     private final org.example.wavepilot.template.definition.ExperimentDefinitionRegistry definitionRegistry;
     private final ExperimentGridResolver gridResolver;
     private final ExecutorService orchestrationExecutor = Executors.newFixedThreadPool(4);
+    private final ConcurrentMap<String, String> idempotentJobs = new ConcurrentHashMap<>();
 
     public ExperimentService(ExperimentSpecValidator specValidator, ExperimentStateMachine stateMachine,
                              ExperimentJobRepository repository, ExperimentRunner runner,
@@ -92,6 +95,25 @@ public class ExperimentService {
     }
 
     public ExperimentJob create(ExperimentSpec spec) {
+        return createInternal(spec);
+    }
+
+    /**
+     * Controlled idempotent entry point for durable AgentRun execution. The key never reaches
+     * the Runner and cannot alter the ExperimentSpec; duplicate calls reuse the first job.
+     */
+    public ExperimentJob create(ExperimentSpec spec, String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) return createInternal(spec);
+        synchronized (idempotentJobs) {
+            String existing = idempotentJobs.get(idempotencyKey);
+            if (existing != null) return get(existing);
+            ExperimentJob created = createInternal(spec);
+            idempotentJobs.put(idempotencyKey, created.getJobId());
+            return created;
+        }
+    }
+
+    private ExperimentJob createInternal(ExperimentSpec spec) {
         ValidationResult validation = specValidator.validate(spec);
         if (!validation.valid()) {
             throw new InvalidExperimentSpecException(validation);

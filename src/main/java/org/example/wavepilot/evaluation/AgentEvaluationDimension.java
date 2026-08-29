@@ -1,0 +1,13 @@
+package org.example.wavepilot.evaluation;
+
+public enum AgentEvaluationDimension {
+    TASK_SUCCESS,
+    PLAN_VALIDITY,
+    TOOL_SELECTION_CORRECTNESS,
+    EXPERIMENT_SPEC_VALIDITY,
+    CITATION_VALIDITY,
+    RETRIEVAL_QUALITY,
+    GROUNDED_RESULT_CONSISTENCY,
+    REPLAY_SUCCESS,
+    LOOP_TERMINATION
+}

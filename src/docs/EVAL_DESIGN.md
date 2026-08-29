@@ -1,6 +1,6 @@
 # Phase 5D 离线 Eval 设计
 
-更新时间：2026-08-06
+更新时间：2026-08-30
 
 ## 目标与边界
 
@@ -40,6 +40,30 @@ specParseAccuracy、missingParameterDetectionRate、invalidParameterBlockRate、
 
 `POST /api/evaluations/compare` 对**同一数据集**的两个 Run 做配对比较：每项指标的 baseline/candidate/delta、退化 Case 列表、新增通过 Case 列表、releaseAllowed（无退化 Case 且无指标下降）。逐 Case 结果始终保留，禁止只看总分。
 
+## Knowledge/RAG Retrieval Eval
+
+`RetrievalEvaluationDataset` 是单独版本化的数据集 `wavepilot-hybrid-retrieval-v1`。每个 Case
+包含 query、relevantChunkIds、relevantDocumentIds、QueryType、可选 metadata filter 和 topK。
+运行时对同一批 6 个 Case 自动比较：
+
+1. Dense Only；
+2. BM25 Only；
+3. Hybrid RRF；
+4. Hybrid RRF + Deterministic Rerank。
+
+`RetrievalMetricCalculator` 从实际返回顺序计算 Recall@K、Precision@K、MRR、nDCG@K 和
+Citation Hit Rate。`RetrievalEvaluationService` 同时登记 JSON 与 Markdown Artifact。当前实际
+Top-3 结果四路均为 Recall=1.0、Precision=0.333333、MRR=1.0、nDCG=1.0、Citation Hit
+Rate=1.0。这个精确匹配小数据集验证实现正确性，不构成策略优劣或科研效果证据。
+
+## Scientific Agent Regression Eval
+
+`AgentRegressionEvaluationService` 不接受模型自报分数，而是读取实际 AgentRun、Retrieval
+Evaluation 和 ReplayRecord，计算 9 个布尔维度：task success、plan validity、tool selection
+correctness、ExperimentSpec validity、citation validity、retrieval quality、grounded result
+consistency、replay success、loop termination。Baseline/Candidate 按维度配对，任何由 pass
+变 fail 的维度都会进入 `regressedDimensions` 并阻止 release。
+
 ## API
 
 - `POST /api/evaluations/run`（datasetName、modelName；默认 stub-v1）
@@ -47,6 +71,11 @@ specParseAccuracy、missingParameterDetectionRate、invalidParameterBlockRate、
 - `GET /api/evaluations/{evaluationId}`
 - `GET /api/evaluations/{evaluationId}/report`
 - `POST /api/evaluations/compare`
+- `POST /api/retrieval-evaluations/run`
+- `GET /api/retrieval-evaluations/{evaluationId}`
+- `GET /api/retrieval-evaluations/{evaluationId}/report.md`
+- `POST /api/agent-regression-evaluations/run`
+- `POST /api/agent-regression-evaluations/compare`
 
 ArtifactType 增加 `EVAL_REPORT`、`EVAL_CASE_RESULTS`、`EVAL_COMPARISON`，登记在 evaluationId 目录下。
 

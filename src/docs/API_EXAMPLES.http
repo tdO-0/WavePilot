@@ -181,3 +181,57 @@ Content-Type: application/json
   "baselineEvaluationId": "EVAL-XXXXXXXXXXXX",
   "candidateEvaluationId": "EVAL-YYYYYYYYYYYY"
 }
+
+### Run a bounded Scientific Agent loop (Mock is the default runner)
+POST {{baseUrl}}/api/scientific-agent/runs
+Content-Type: application/json
+
+{
+  "description": "search a bounded error-rate range that satisfies an accuracy threshold",
+  "initialSpec": {
+    "experimentType": "POLAR_CODE_K_IDENTIFICATION",
+    "codeLengths": [32],
+    "errorRateStart": 0.2,
+    "errorRateEnd": 0.3,
+    "errorRateStep": 0.05,
+    "sampleCount": 20,
+    "monteCarloTimes": 10,
+    "randomSeed": 20,
+    "outputTypes": ["ACCURACY_CSV", "RUN_LOG"],
+    "description": "offline scientific-agent loop"
+  },
+  "metricName": "averageAccuracy",
+  "operator": "GREATER_THAN_OR_EQUAL",
+  "targetValue": 0.82,
+  "parameterBounds": {
+    "errorRateStart": {"minimum": 0.0, "maximum": 0.4, "maximumChangePerReplan": 0.1},
+    "errorRateEnd": {"minimum": 0.05, "maximum": 0.5, "maximumChangePerReplan": 0.1}
+  },
+  "budget": {
+    "maxIterations": 4,
+    "maxExperiments": 4,
+    "maxModelCalls": 0,
+    "maxTokens": 0,
+    "maxRetries": 1,
+    "timeout": "PT2M"
+  }
+}
+
+### Resume one Scientific Agent checkpoint
+POST {{baseUrl}}/api/scientific-agent/runs/{{runId}}/resume
+
+### Run Dense/BM25/Hybrid retrieval evaluation
+POST {{baseUrl}}/api/retrieval-evaluations/run
+
+### Read the human-readable retrieval report
+GET {{baseUrl}}/api/retrieval-evaluations/{{retrievalEvaluationId}}/report.md
+
+### Evaluate actual AgentRun + retrieval eval + replay records
+POST {{baseUrl}}/api/agent-regression-evaluations/run
+Content-Type: application/json
+
+{
+  "runId": "RUN-XXXXXXXX-XXX",
+  "retrievalEvaluationId": "RAGEVAL-XXXXXXXX-XXX",
+  "replayId": "REPLAY-XXXXXXXX-XXX"
+}
