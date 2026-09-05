@@ -1,4 +1,4 @@
-<h1 align="center">🌊 WavePilot</h1>
+<h1 align="center">📡 WavePilot</h1>
 <p align="center"><strong>通信仿真实验智能体平台</strong></p>
 <p align="center">从自然语言目标出发，让实验可执行、结果可核验、过程可回放。</p>
 
@@ -26,29 +26,13 @@ WavePilot 面向通信仿真实验，将自然语言目标转换为经过 Java �
 
 默认使用离线模拟执行器（Mock Runner）。模拟指标只用于验证软件链路，不代表 MATLAB 或通信算法的科研结果。
 
-<a id="version"></a>
-
-## ✨ 版本说明
-
-### 1.0.0-SNAPSHOT · MySQL 与 RabbitMQ 后端扩展（2026-09-06）
-
-本次为现有开发版本的增量更新，Maven 版本号保持 `1.0.0-SNAPSHOT`。
-
-- 新增可选 MySQL 持久化：基于 MyBatis-Plus 的仓储实现、Flyway 数据库迁移、唯一索引提交幂等与乐观锁状态更新。
-- 新增 RabbitMQ 异步执行：同一 Jar 支持 `standalone`、`api`、`worker`，通过数据库条件更新避免多个 Worker 重复执行；支持手动 ACK、最多 3 次临时异常重试及死信队列。
-- 保留内存/文件仓储、本地执行、模拟与本机 MATLAB 执行器、科研智能体执行账本和原有 SSE；补充跨进程结果文件元数据读取与实验回放来源关系持久化。
-- 新增 [后端 Docker Compose](docker-compose.backend.yml) 和 [启动、验证及边界说明](docs/BACKEND_DISTRIBUTED_TASK.md)。已验证一个 API 与两个 Worker 使用同一镜像运行。
-- 验证结果：408 项默认测试及 6 项真实 MySQL/RabbitMQ 集成测试全部通过，0 失败、0 错误、0 跳过。默认测试不要求外部数据库、消息队列或 Docker。
-
-交付语义为“至少一次投递 + 幂等消费”。尚无 Outbox 和 Worker 崩溃后的自动接管，定位为教学与项目展示级实现。
-
 <p align="center">
   <img src="docs/assets/wavepilot-workbench.png" alt="WavePilot 结果与证据工作台" width="100%">
 </p>
 
 <a id="architecture"></a>
 
-## 🧭 核心架构
+## 核心架构
 
 ```text
 实验目标
@@ -66,7 +50,7 @@ WavePilot 面向通信仿真实验，将自然语言目标转换为经过 Java �
 
 <a id="demo"></a>
 
-## 🎬 30 秒操作演示
+## 30 秒操作演示
 
 <p align="center">
   <img src="docs/assets/wavepilot-demo.gif" alt="WavePilot 30 秒操作演示" width="100%">
@@ -87,7 +71,7 @@ mvn spring-boot:run
 .\examples\reproducible-showcase\run.ps1
 ```
 
-## 🔄 科研智能体执行闭环
+## 科研智能体执行闭环
 
 `目标 → 计划 → 检索 → 执行 → 观察 → 验证 → 重规划 / 完成`
 
@@ -96,7 +80,7 @@ mvn spring-boot:run
 - `RunBudget` 限制迭代次数、实验次数、模型调用次数、词元消耗、重试次数与总运行时间。
 - 智能体在关键阶段原子保存检查点；执行账本持久化执行 ID、参数指纹、任务 ID、状态与结果文件引用。
 
-## 🔎 混合检索与知识增强
+## 混合检索与知识增强
 
 - 向量检索：使用 Milvus，或用于离线演示的内存向量库。
 - 关键词检索：使用进程内 Apache Lucene BM25；领域分词器支持中文双字组合、英文、数字、通信缩写、`Eb/N0`、驼峰和下划线命名。
@@ -105,7 +89,7 @@ mvn spring-boot:run
 - 受控重排：默认按词项重合度确定性重排；可选 DashScope 模型只能返回已有片段 ID 的完整排列，非法输出自动回退。
 - 引用溯源：重排前后完整保留来源、章节、元数据及 `KB[documentId/chunkId]` 引用。
 
-## 📊 实验回放、评测与证据校验
+## 实验回放、评测与证据校验
 
 WavePilot 的结论只来自通过结构校验和 SHA-256 校验的结果文件（Artifact）。实验回放使用相同参数与随机种子创建独立任务，并按声明容差比较数值结果。
 
@@ -127,7 +111,7 @@ WavePilot 的结论只来自通过结构校验和 SHA-256 校验的结果文件�
 
 <a id="validation"></a>
 
-## ✅ 工程测试与验证
+## 工程测试与验证
 
 ```powershell
 mvn -B clean test
@@ -149,7 +133,7 @@ mvn -B "-Dtest=AgentRegressionEvaluationTest,ScientificAgentLoopTest,ExecutionLe
 
 测试验证的是编排、安全边界、恢复、检索和证据链。模拟实验的 `averageAccuracy`、测试延迟与离线嵌入指标不能用作科研性能结论。
 
-## 🧠 可选真实模型接入
+## 可选真实模型接入
 
 默认测试完全离线。要评测真实 DashScope 列表重排模型、规划器和重规划器，请先设置有效凭据并启动应用：
 
@@ -168,7 +152,7 @@ mvn spring-boot:run
 
 <a id="quick-start"></a>
 
-## 🚀 快速开始
+## 快速开始
 
 需要 JDK 17+ 与 Maven 3.9+。以下离线配置不需要模型密钥、Milvus 或 MATLAB。
 
@@ -196,7 +180,7 @@ mvn spring-boot:run
 
 <a id="backend"></a>
 
-## 📨 可选 MySQL 与 RabbitMQ 后端
+## 可选 MySQL 与 RabbitMQ 后端
 
 默认使用本地执行与内存仓储；文件模式设 `WAVEPILOT_JOB_REPOSITORY=file`。可选后端使用 MySQL、MyBatis-Plus、Flyway 与 Spring AMQP，支持数据库幂等提交、条件更新抢占、手动确认、有限重试和死信。现有 GET/SSE 接口从仓储读取最新进度。
 
@@ -243,7 +227,7 @@ curl.exe -N "http://localhost:9900/api/experiments/$($a.jobId)/stream"
 
 这是教学和项目展示级的“至少一次投递 + 幂等消费”。没有 Outbox，数据库提交与消息发布间仍有失败窗口；Worker 抢占后崩溃需要人工核查，不声明 Exactly Once 或生产级高可用。
 
-## 🧩 技术栈
+## 技术栈
 
 - Java 17、Spring Boot 3.2、Maven、JUnit 5
 - Spring AI Alibaba / DashScope（可选）
@@ -255,7 +239,7 @@ curl.exe -N "http://localhost:9900/api/experiments/$($a.jobId)/stream"
 
 <a id="docs"></a>
 
-## 📚 项目文档
+## 项目文档
 
 - [MySQL 与 RabbitMQ 异步任务后端](docs/BACKEND_DISTRIBUTED_TASK.md)
 - [整体架构](src/docs/ARCHITECTURE.md)
@@ -269,7 +253,7 @@ curl.exe -N "http://localhost:9900/api/experiments/$($a.jobId)/stream"
 - [接口调用示例](src/docs/API_EXAMPLES.http)
 - [实验类型扩展指南](src/docs/EXPERIMENT_TYPE_EXTENSION_GUIDE.md)
 
-## 🛡️ 当前边界
+## 当前边界
 
 - 默认离线测试与持续集成不调用真实模型、Milvus 或 MATLAB。
 - 科研智能体执行账本仍为单实例文件实现；MySQL 持久化覆盖实验任务，不提供分布式租约或多实例主节点选举。
@@ -278,6 +262,22 @@ curl.exe -N "http://localhost:9900/api/experiments/$($a.jobId)/stream"
 - 已完成账本记录只有在结果路径、文件大小、SHA-256 和验证标记全部检查通过后才复用；无法确认的副作用保持 `UNCERTAIN`，不会被当成成功。
 - 模拟执行与离线嵌入结果不能证明通信算法精度、收敛性、吞吐或模型能力。
 
-## 📄 开源许可
+## 开源许可
 
 [Apache License 2.0](LICENSE)
+
+<a id="version"></a>
+
+## 版本记录
+
+开发版本为 `1.0.0-SNAPSHOT`，以下按功能更新阶段记录。
+
+### 前一阶段：科研智能体与混合检索
+
+- 新增受控规划、混合检索与重排，完善实验回放和双语检索评测。
+- 新增持久化执行账本、结果文件校验与已完成实验恢复。
+
+### 本次更新：MySQL 与 RabbitMQ 后端
+
+- 新增 MySQL 持久化、数据库幂等提交，以及 API / Worker 分角色异步执行。
+- 新增手动 ACK、有限重试、死信队列与 Docker Compose 部署；完善跨进程结果查询和实验回放。
