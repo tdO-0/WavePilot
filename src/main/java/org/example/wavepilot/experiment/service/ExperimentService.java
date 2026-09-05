@@ -35,8 +35,7 @@ import java.util.NoSuchElementException;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import org.example.wavepilot.experiment.messaging.ExperimentMessagePublisher;
 
 @Service
 public class ExperimentService {
@@ -52,7 +51,22 @@ public class ExperimentService {
     private final org.example.wavepilot.template.definition.ExperimentDefinitionRegistry definitionRegistry;
     private final ExperimentGridResolver gridResolver;
     private final ExecutorService orchestrationExecutor = Executors.newFixedThreadPool(4);
-    private final ConcurrentMap<String, String> idempotentJobs = new ConcurrentHashMap<>();
+    private String nodeRole = "standalone";
+    private ExperimentMessagePublisher publisher;
+
+    @Autowired
+    public void configureBackend(
+            @org.springframework.beans.factory.annotation.Value("${wavepilot.node-role:standalone}") String role,
+            org.springframework.beans.factory.ObjectProvider<ExperimentMessagePublisher> publishers) {
+        if (!List.of("standalone", "api", "worker").contains(role)) {
+            throw new IllegalArgumentException("Unknown wavepilot.node-role: " + role);
+        }
+        this.nodeRole = role;
+        this.publisher = publishers.getIfAvailable();
+        if (!"standalone".equals(role) && publisher == null) {
+            throw new IllegalStateException("api/worker require the MySQL + RabbitMQ backend configuration");
+        }
+    }
 
     public ExperimentService(ExperimentSpecValidator specValidator, ExperimentStateMachine stateMachine,
                              ExperimentJobRepository repository, ExperimentRunner runner,
@@ -95,7 +109,7 @@ public class ExperimentService {
     }
 
     public ExperimentJob create(ExperimentSpec spec) {
-        return createInternal(spec);
+        return create(spec, null);
     }
 
     /**
@@ -103,34 +117,78 @@ public class ExperimentService {
      * the Runner and cannot alter the ExperimentSpec; duplicate calls reuse the first job.
      */
     public ExperimentJob create(ExperimentSpec spec, String idempotencyKey) {
-        if (idempotencyKey == null || idempotencyKey.isBlank()) return createInternal(spec);
-        synchronized (idempotentJobs) {
-            String existing = idempotentJobs.get(idempotencyKey);
-            if (existing != null) return get(existing);
-            ExperimentJob created = createInternal(spec);
-            idempotentJobs.put(idempotencyKey, created.getJobId());
-            return created;
+        requireSubmissionRole();
+        if (idempotencyKey != null && !idempotencyKey.matches("[!-~]{1,128}"))
+            throw new IllegalArgumentException("Idempotency-Key must contain 1-128 visible ASCII characters");
+        if (idempotencyKey != null) {
+            var existing = repository.findByIdempotencyKey(idempotencyKey);
+            if (existing.isPresent()) return redispatchIfQueued(existing.get());
         }
+        return createInternal(spec, idempotencyKey);
     }
 
-    private ExperimentJob createInternal(ExperimentSpec spec) {
+    private ExperimentJob createInternal(ExperimentSpec spec, String key) {
         ValidationResult validation = specValidator.validate(spec);
         if (!validation.valid()) {
             throw new InvalidExperimentSpecException(validation);
         }
         String jobId = "JOB-" + UUID.randomUUID().toString().substring(0, 12).toUpperCase();
         ExperimentPlan plan = previewPlan(spec);
-        ExperimentJob job = repository.save(new ExperimentJob(jobId, spec, plan));
+        ExperimentJob candidate = new ExperimentJob(jobId, spec, plan);
+        candidate.setIdempotencyKey(key);
+        ExperimentJob job = repository.insertIfAbsent(candidate);
+        if (!job.getJobId().equals(jobId)) return redispatchIfQueued(job);
         transitionAndPersist(job, ExperimentStatus.VALIDATED, "ExperimentSpec validated by Java");
         try {
             artifactRegistry.writeJson(jobId, ArtifactType.EXPERIMENT_SPEC, "experiment-spec.json", spec);
             artifactRegistry.writeJson(jobId, ArtifactType.EXPERIMENT_PLAN, "experiment-plan.json", plan);
             transitionAndPersist(job, ExperimentStatus.QUEUED, "Experiment queued for controlled runner");
-            orchestrationExecutor.submit(() -> execute(job));
-            return job;
         } catch (RuntimeException e) {
             fail(job, "Could not initialize experiment artifacts: " + e.getMessage());
             throw e;
+        }
+        dispatch(job);
+        return job;
+    }
+
+    private void requireSubmissionRole() {
+        if ("worker".equals(nodeRole)) throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "Worker does not accept experiment submissions");
+    }
+
+    private ExperimentJob redispatchIfQueued(ExperimentJob job) {
+        // Allows the client to recover a failed publish with the same key; DB claim tolerates duplicates.
+        if ("api".equals(nodeRole) && job.getStatus() == ExperimentStatus.QUEUED) dispatch(job);
+        return job;
+    }
+
+    private void dispatch(ExperimentJob job) {
+        if ("api".equals(nodeRole)) {
+            try {
+                publisher.publish(job.getJobId());
+            } catch (RuntimeException e) {
+                // No Outbox: keep the committed QUEUED record and report the job ID for recovery.
+                throw new DispatchUnavailableException(job.getJobId(), e);
+            }
+        } else {
+            orchestrationExecutor.submit(() -> execute(job));
+        }
+    }
+
+    /** Returns false for a duplicate. The SQL claim is the only permission to run a Worker job. */
+    public boolean executeQueued(String jobId) {
+        ExperimentJob job = get(jobId);
+        if (job.getStatus() == ExperimentStatus.CREATED || job.getStatus() == ExperimentStatus.VALIDATED)
+            throw new org.springframework.dao.TransientDataAccessResourceException("Job is not queued yet");
+        if (job.getStatus() != ExperimentStatus.QUEUED || !repository.tryClaim(job)) return false;
+        try {
+            execute(job);
+            if (job.getStatus() == ExperimentStatus.FAILED)
+                throw new IllegalStateException(job.getFailureReason());
+            return true;
+        } catch (RuntimeException e) {
+            // Never retry Runner submission after the claim: side effects may already exist.
+            throw new IllegalStateException("Claimed execution failed; inspect job " + jobId, e);
         }
     }
 
@@ -141,6 +199,10 @@ public class ExperimentService {
 
     public List<ExperimentJob> list() { return repository.findAll(); }
     public ExperimentProgress progress(String jobId) { return get(jobId).getProgress(); }
+
+    public void attachSource(String jobId, String sourceJobId) {
+        repository.attachSource(jobId, sourceJobId);
+    }
 
     public ExperimentPlan previewPlan(ExperimentSpec spec) {
         ValidationResult validation = specValidator.validate(spec);
@@ -169,6 +231,7 @@ public class ExperimentService {
 
     /** Create a declarative-template experiment job with real generic semantics. */
     public ExperimentJob create(GenericExperimentSpec spec) {
+        requireSubmissionRole();
         ExperimentDefinition definition = definitionFor(spec);
         if (definition == null) {
             throw new InvalidExperimentSpecException(ValidationResult.failure(
@@ -177,18 +240,18 @@ public class ExperimentService {
         }
         String jobId = "JOB-" + UUID.randomUUID().toString().substring(0, 12).toUpperCase();
         ExperimentPlan plan = previewPlan(spec);
-        ExperimentJob job = repository.save(new ExperimentJob(jobId, spec, plan));
+        ExperimentJob job = repository.insertIfAbsent(new ExperimentJob(jobId, spec, plan));
         transitionAndPersist(job, ExperimentStatus.VALIDATED, "Generic spec validated against template definition");
         try {
             artifactRegistry.writeJson(jobId, ArtifactType.EXPERIMENT_SPEC, "experiment-spec.json", spec);
             artifactRegistry.writeJson(jobId, ArtifactType.EXPERIMENT_PLAN, "experiment-plan.json", plan);
             transitionAndPersist(job, ExperimentStatus.QUEUED, "Experiment queued for controlled runner");
-            orchestrationExecutor.submit(() -> execute(job));
-            return job;
         } catch (RuntimeException e) {
             fail(job, "Could not initialize experiment artifacts: " + e.getMessage());
             throw e;
         }
+        dispatch(job);
+        return job;
     }
 
     private ExperimentDefinition definitionFor(GenericExperimentSpec spec) {
@@ -250,7 +313,7 @@ public class ExperimentService {
             if (job.getStatus().isTerminal()) {
                 return job;
             }
-            if (job.getExternalJobId() != null) {
+            if (job.getExternalJobId() != null && !"api".equals(nodeRole)) {
                 runner.cancel(job.getExternalJobId());
                 registerAvailableRunnerArtifacts(job, job.getExternalJobId());
             }
@@ -283,8 +346,13 @@ public class ExperimentService {
                 }
                 submission = runner.submit(job);
                 job.setExternalJobId(submission.externalJobId());
+                repository.save(job);
             }
             while (!job.getStatus().isTerminal()) {
+                if (!"standalone".equals(nodeRole) && get(job.getJobId()).getStatus() == ExperimentStatus.CANCELLED) {
+                    runner.cancel(submission.externalJobId());
+                    return;
+                }
                 RunnerStatus status = runner.getStatus(submission.externalJobId());
                 if (status.state() == RunnerStatus.State.RUNNING && job.getStatus() == ExperimentStatus.QUEUED) {
                     transitionAndPersist(job, ExperimentStatus.RUNNING, "Controlled runner started");
@@ -292,7 +360,8 @@ public class ExperimentService {
                 if (status.state() == RunnerStatus.State.QUEUED || status.state() == RunnerStatus.State.RUNNING) {
                     job.updateProgress(status.progress(), status.state().name(), status.completedRuns(),
                             status.totalRuns(), status.message());
-                    Thread.sleep(20);
+                    repository.save(job);
+                    Thread.sleep("standalone".equals(nodeRole) ? 20 : 200);
                     continue;
                 }
                 if (status.state() == RunnerStatus.State.CANCELLED) {
@@ -326,6 +395,17 @@ public class ExperimentService {
                         runner.runnerType() + " experiment succeeded and artifacts were validated");
                 return;
             }
+        } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+            // A cancellation won the database race; never overwrite it with stale progress.
+            if (get(job.getJobId()).getStatus() == ExperimentStatus.CANCELLED) {
+                if (job.getExternalJobId() != null) runner.cancel(job.getExternalJobId());
+                return;
+            }
+            throw e;
+        } catch (org.springframework.dao.DataAccessException e) {
+            // An in-memory terminal transition is not proof that its DB write succeeded.
+            // Surface persistence failures to the consumer instead of ACKing a lost result.
+            throw e;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             fail(job, "Experiment orchestration interrupted");
@@ -405,6 +485,15 @@ public class ExperimentService {
         }
 
         public ValidationResult getValidationResult() { return validationResult; }
+    }
+
+    public static class DispatchUnavailableException extends RuntimeException {
+        private final String jobId;
+        public DispatchUnavailableException(String jobId, Throwable cause) {
+            super("Job saved but message publish is unconfirmed", cause);
+            this.jobId = jobId;
+        }
+        public String getJobId() { return jobId; }
     }
 
     public record ExperimentSummaryView(String jobId, boolean mock, String artifactId,

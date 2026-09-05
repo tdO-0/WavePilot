@@ -1,5 +1,6 @@
 # 构建上下文排除：不把本地数据/产物/仓库历史送进 Docker 构建
-target/
+target/*
+!target/wavepilot-1.0.0-SNAPSHOT.jar
 .git/
 .gitignore
 .idea/

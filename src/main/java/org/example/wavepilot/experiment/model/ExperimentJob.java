@@ -15,6 +15,8 @@ public final class ExperimentJob {
     private volatile String externalJobId;
     private volatile String sourceJobId;
     private volatile String failureReason;
+    private String idempotencyKey;
+    private long version;
 
     public ExperimentJob(String jobId, ExperimentSpec spec, ExperimentPlan plan) {
         this(jobId, spec, null, plan);
@@ -98,6 +100,10 @@ public final class ExperimentJob {
     public String getExternalJobId() { return externalJobId; }
     public String getSourceJobId() { return sourceJobId; }
     public String getFailureReason() { return failureReason; }
+    public String getIdempotencyKey() { return idempotencyKey; }
+    public void setIdempotencyKey(String key) { this.idempotencyKey = key; }
+    public long getVersion() { return version; }
+    public void setVersion(long version) { this.version = version; }
     public void setExternalJobId(String externalJobId) { this.externalJobId = externalJobId; }
     public void setSourceJobId(String sourceJobId) { this.sourceJobId = sourceJobId; }
     public void setFailureReason(String failureReason) { this.failureReason = failureReason; }

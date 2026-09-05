@@ -11,11 +11,11 @@ COPY src ./src
 RUN mvn -B clean package -DskipTests -q
 
 # ---------- 运行阶段 ----------
-FROM eclipse-temurin:17-jre
+FROM eclipse-temurin:17-jre AS runtime-base
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 # 非 root 运行更安全（数据目录由 compose 挂载，需保证可写）
 RUN useradd -m -u 10001 wavepilot
-COPY --from=build /build/target/*.jar app.jar
 RUN mkdir -p /app/artifacts /app/data/wavepilot/templates /app/uploads \
     && chown -R wavepilot:wavepilot /app
 USER wavepilot
@@ -31,3 +31,11 @@ ENV WAVEPILOT_RUNNER_TYPE=mock \
 
 EXPOSE 9900
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+
+# Optional: package the already tested local Jar without downloading Maven dependencies again.
+FROM runtime-base AS backend-local
+COPY target/wavepilot-1.0.0-SNAPSHOT.jar app.jar
+
+# Default target preserves the original build-from-source workflow.
+FROM runtime-base AS runtime
+COPY --from=build /build/target/*.jar app.jar

@@ -69,6 +69,18 @@ class ExperimentControllerContractTest {
     }
 
     @Test
+    void forwardsIdempotencyHeaderAndReturnsTheSameJob() throws Exception {
+        when(experimentService.create(any(ExperimentSpec.class), org.mockito.ArgumentMatchers.eq("request-1")))
+                .thenReturn(WavePilotTestFixtures.job("JOB-IDEMPOTENT"));
+        for (int i = 0; i < 2; i++) {
+            mockMvc.perform(post("/api/experiments").header("Idempotency-Key", "request-1")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(WavePilotTestFixtures.validSpec())))
+                    .andExpect(status().isAccepted()).andExpect(jsonPath("$.jobId").value("JOB-IDEMPOTENT"));
+        }
+    }
+
+    @Test
     void exposesSseProgressStream() throws Exception {
         ExperimentJob job = WavePilotTestFixtures.job("JOB-API-SSE");
         job.changeStatus(ExperimentStatus.SUCCEEDED, "done");
@@ -79,6 +91,15 @@ class ExperimentControllerContractTest {
                 .andExpect(status().isOk())
                 .andExpect(request().asyncStarted())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM));
+    }
+
+    @Test
+    void publishFailureReturnsSavedJobIdForRecovery() throws Exception {
+        when(experimentService.create(any(ExperimentSpec.class)))
+                .thenThrow(new ExperimentService.DispatchUnavailableException("JOB-SAVED", new IllegalStateException("offline")));
+        mockMvc.perform(post("/api/experiments").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(WavePilotTestFixtures.validSpec())))
+                .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.jobId").value("JOB-SAVED"));
     }
 
     @Test

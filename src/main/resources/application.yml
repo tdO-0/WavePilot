@@ -26,6 +26,15 @@ milvus:
 
 # Spring AI Alibaba DashScope 配置
 spring:
+  datasource:
+    url: ${WAVEPILOT_MYSQL_URL:jdbc:mysql://localhost:3306/wavepilot?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true}
+    username: ${WAVEPILOT_MYSQL_USER:wavepilot}
+    password: ${WAVEPILOT_MYSQL_PASSWORD:wavepilot-dev-only}
+  rabbitmq:
+    host: ${WAVEPILOT_RABBIT_HOST:localhost}
+    port: ${WAVEPILOT_RABBIT_PORT:5672}
+    username: ${WAVEPILOT_RABBIT_USER:wavepilot}
+    password: ${WAVEPILOT_RABBIT_PASSWORD:wavepilot-dev-only}
   ai:
     dashscope:
       api-key: ${DASHSCOPE_API_KEY:not-configured}
@@ -54,6 +63,9 @@ document:
 # only on a host with a trusted MATLAB executable. MCP MATLAB is not implemented.
 wavepilot:
   enabled: true
+  node-role: ${WAVEPILOT_NODE_ROLE:standalone}
+  # Keep the older jobs.persistence setting working; new setting takes precedence.
+  job-repository: ${WAVEPILOT_JOB_REPOSITORY:${wavepilot.jobs.persistence:in-memory}}
   ai:
     chat-model: "qwen3.7-max"
     embedding-model: "qwen3.7-text-embedding"
@@ -68,6 +80,7 @@ wavepilot:
       shutdown-grace: ${WAVEPILOT_MATLAB_SHUTDOWN_GRACE:5s}
   artifacts:
     root: "${WAVEPILOT_ARTIFACT_ROOT:artifacts}"
+    shared-metadata: ${WAVEPILOT_SHARED_ARTIFACT_METADATA:false}
   replay:
     numeric-tolerance: 1.0e-9
   knowledge:

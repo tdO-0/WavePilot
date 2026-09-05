@@ -29,6 +29,8 @@ public class ArtifactRegistry {
     private final Path root;
     private final ObjectMapper objectMapper;
     private final ConcurrentMap<String, ArtifactRecord> records = new ConcurrentHashMap<>();
+    @Value("${wavepilot.artifacts.shared-metadata:false}")
+    private boolean sharedMetadata;
 
     public ArtifactRegistry(@Value("${wavepilot.artifacts.root:artifacts}") String root,
                             ObjectMapper objectMapper) {
@@ -90,6 +92,7 @@ public class ArtifactRegistry {
                     Instant.now(),
                     realFile.toString());
             records.put(record.artifactId(), record);
+            persistMetadata(record);
             return record;
         } catch (IOException e) {
             throw new ArtifactStorageException("Cannot register artifact " + file, e);
@@ -98,6 +101,7 @@ public class ArtifactRegistry {
 
     public List<ArtifactRecord> listByJobId(String jobId) {
         validateJobId(jobId);
+        if (sharedMetadata) loadMetadata();
         return records.values().stream()
                 .filter(record -> record.jobId().equals(jobId))
                 .sorted((left, right) -> left.createdAt().compareTo(right.createdAt()))
@@ -105,6 +109,7 @@ public class ArtifactRegistry {
     }
 
     public Optional<ArtifactRecord> findById(String artifactId) {
+        if (sharedMetadata) loadMetadata();
         return Optional.ofNullable(records.get(artifactId));
     }
 
@@ -112,12 +117,61 @@ public class ArtifactRegistry {
                                  boolean algorithmValidated, String classification,
                                  String templateVersion, String algorithmVersion) {
         validateJobId(jobId);
+        if (sharedMetadata) loadMetadata();
         records.replaceAll((id, record) -> record.jobId().equals(jobId)
                 ? new ArtifactRecord(record.artifactId(), record.jobId(), record.type(), record.fileName(),
                 runnerType, mock, algorithmValidated, classification, record.relativePath(),
                 record.sha256(), record.size(), record.mimeType(), templateVersion, algorithmVersion,
                 true, record.createdAt(), record.path())
                 : record);
+        if (sharedMetadata) records.values().stream().filter(record -> record.jobId().equals(jobId))
+                .forEach(this::persistMetadata);
+    }
+
+    /** Small shared-volume registry for the optional API/Worker deployment. One file per record
+     * avoids a read/modify/write manifest race between different processes. */
+    private void persistMetadata(ArtifactRecord record) {
+        if (!sharedMetadata) return;
+        try {
+            Path directory = root.resolve(".metadata");
+            Files.createDirectories(directory);
+            Path temporary = Files.createTempFile(directory, "artifact-", ".tmp");
+            try {
+                objectMapper.writeValue(temporary.toFile(), record);
+                Path target = directory.resolve(record.artifactId() + ".json");
+                try {
+                    Files.move(temporary, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                    Files.move(temporary, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally {
+                Files.deleteIfExists(temporary);
+            }
+        } catch (IOException e) {
+            throw new ArtifactStorageException("Cannot persist shared artifact metadata", e);
+        }
+    }
+
+    private void loadMetadata() {
+        Path directory = root.resolve(".metadata");
+        if (!Files.isDirectory(directory)) return;
+        try (var files = Files.list(directory)) {
+            for (Path file : files.filter(path -> path.getFileName().toString().endsWith(".json")).toList()) {
+                if (Files.isSymbolicLink(file)) throw new ArtifactStorageException("Metadata symlink rejected");
+                ArtifactRecord record = objectMapper.readValue(file.toFile(), ArtifactRecord.class);
+                validateJobId(record.jobId());
+                Path resolved = root.resolve(record.relativePath()).normalize();
+                ensureWithin(resolved, root.resolve(record.jobId()));
+                // Do not trust a different process's absolute path.
+                records.put(record.artifactId(), new ArtifactRecord(record.artifactId(), record.jobId(),
+                        record.type(), record.fileName(), record.runnerType(), record.mock(), record.algorithmValidated(),
+                        record.classification(), record.relativePath(), record.sha256(), record.size(), record.mimeType(),
+                        record.templateVersion(), record.algorithmVersion(), record.validated(), record.createdAt(), resolved.toString()));
+            }
+        } catch (IOException e) {
+            throw new ArtifactStorageException("Cannot read shared artifact metadata", e);
+        }
     }
 
     public boolean verify(String artifactId) {

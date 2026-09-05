@@ -108,7 +108,7 @@ public class ReplayService {
         ExperimentJob replayJob = source.getGenericSpec() != null
                 ? experimentService.create(source.getGenericSpec())
                 : experimentService.create(source.getSpec());
-        replayJob.setSourceJobId(sourceJobId);
+        experimentService.attachSource(replayJob.getJobId(), sourceJobId);
         record.setReplayJobId(replayJob.getJobId());
         record.updateManifest(manifest.withReplayJobId(replayJob.getJobId()));
         repository.save(record);

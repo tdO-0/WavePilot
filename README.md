@@ -8,6 +8,20 @@ WavePilot 是面向通信仿真实验的受控 Scientific Agent 平台。它把�
 
 默认配置使用离线 Mock Runner。Mock 指标只验证软件链路，不代表 MATLAB 或通信算法科研结果。
 
+## 版本说明
+
+### 1.0.0-SNAPSHOT · MySQL 与 RabbitMQ 后端扩展（2026-09-06）
+
+本次为现有开发版本的增量更新，Maven 版本号保持 `1.0.0-SNAPSHOT`。
+
+- 新增可选 MySQL 持久化：MyBatis-Plus Repository、Flyway 建表、唯一索引提交幂等与乐观锁状态更新。
+- 新增 RabbitMQ 异步执行：同一 Jar 支持 `standalone`、`api`、`worker`，通过数据库条件更新避免多个 Worker 重复执行；支持手动 ACK、最多 3 次临时异常重试及死信队列。
+- 保留默认内存/文件 Repository、本地执行、Mock/Local MATLAB Runner、Scientific Execution Ledger 和原有 SSE；补充跨进程 Artifact 元数据读取与 Replay 来源关系持久化。
+- 新增 [后端 Docker Compose](docker-compose.backend.yml) 和 [启动、验证及边界说明](docs/BACKEND_DISTRIBUTED_TASK.md)。已验证一个 API 与两个 Worker 使用同一镜像运行。
+- 验证结果：408 项默认测试及 6 项真实 MySQL/RabbitMQ 集成测试全部通过，0 失败、0 错误、0 跳过。默认测试不要求外部数据库、消息队列或 Docker。
+
+交付语义为“至少一次投递 + 幂等消费”。尚无 Outbox 和 Worker 崩溃后的自动接管，定位为教学与项目展示级实现。
+
 <p align="center">
   <img src="docs/assets/wavepilot-workbench.png" alt="WavePilot 结果与证据工作台" width="100%">
 </p>
@@ -95,7 +109,8 @@ mvn -B "-Dtest=AgentRegressionEvaluationTest,ScientificAgentLoopTest,ExecutionLe
 
 | Check | Reproducible result |
 |---|---:|
-| Maven tests | 388 passed, 0 failures, 0 errors, 0 skipped |
+| Maven tests | 408 passed, 0 failures, 0 errors, 0 skipped |
+| MySQL / RabbitMQ backend integration (`backend-it`) | 6 passed; real infrastructure, offline Mock Runner |
 | Retrieval cases | 80（20 per query type） |
 | Retrieval strategies / case results | 5 / 400 |
 | Agent regression | baseline 17/17; candidate 17/17 |
@@ -149,17 +164,60 @@ $env:MATLAB_EXECUTABLE = "C:\Program Files\MATLAB\R2025b\bin\matlab.exe"
 mvn spring-boot:run
 ```
 
+## MySQL + RabbitMQ Backend (Opt-In)
+
+默认仍使用本地执行与内存 Repository；文件模式设 `WAVEPILOT_JOB_REPOSITORY=file`。可选 MySQL/MyBatis-Plus/Flyway 与 Spring AMQP 后端使用同一 Jar 的 `standalone`、`api`、`worker` 三种角色，支持数据库幂等提交、条件更新抢占、手动 ACK、有限重试与死信。现有 GET/SSE 从 Repository 读取最新进度。
+
+```powershell
+docker compose -f docker-compose.backend.yml up -d --build
+docker compose -f docker-compose.backend.yml up -d --scale wavepilot-worker=2
+# 默认单元测试无需 MySQL、RabbitMQ、Docker
+mvn -B clean test
+# 真实集成验证：先单独启动 Compose 的 mysql、rabbitmq-management 服务
+mvn -B -Pbackend-it verify
+```
+
+同一 Jar 可分别启动（两个进程均配置 MySQL/RabbitMQ 和共享 Artifact）：
+
+```powershell
+$env:WAVEPILOT_JOB_REPOSITORY = "mysql"
+$env:WAVEPILOT_KNOWLEDGE_REPOSITORY = "memory"
+$env:WAVEPILOT_EMBEDDING_OFFLINE = "true"
+$env:WAVEPILOT_SHARED_ARTIFACT_METADATA = "true"
+java -jar target/wavepilot-1.0.0-SNAPSHOT.jar --wavepilot.node-role=api --server.port=9900
+# 另一终端，使用相同环境配置
+java -jar target/wavepilot-1.0.0-SNAPSHOT.jar --wavepilot.node-role=worker --server.port=9901
+```
+
+接口验证：
+
+```powershell
+$body = Get-Content -Raw examples/reproducible-showcase/experiment-spec.json
+$headers = @{ "Idempotency-Key" = "demo-001" }
+$a = Invoke-RestMethod http://localhost:9900/api/experiments -Method Post -Headers $headers -ContentType application/json -Body $body
+$b = Invoke-RestMethod http://localhost:9900/api/experiments -Method Post -Headers $headers -ContentType application/json -Body $body
+$a.jobId -eq $b.jobId
+Invoke-RestMethod "http://localhost:9900/api/experiments/$($a.jobId)"
+curl.exe -N "http://localhost:9900/api/experiments/$($a.jobId)/stream"
+```
+
+连接变量为 `WAVEPILOT_MYSQL_URL/USER/PASSWORD`、`WAVEPILOT_RABBIT_HOST/PORT/USER/PASSWORD`；共享文件根目录为 `WAVEPILOT_ARTIFACT_ROOT`。Compose 默认 Mock Runner 与开发示例密码，API 为 9900、Rabbit 管理台为 15672。完整环境变量、表结构和重试语义见 [后端任务说明](docs/BACKEND_DISTRIBUTED_TASK.md)。
+
+这是教学和项目展示级的“至少一次投递 + 幂等消费”。没有 Outbox，数据库提交与消息发布间仍有失败窗口；Worker 抢占后崩溃需要人工核查，不声明 Exactly Once 或生产级高可用。
+
 ## Technical Stack
 
 - Java 17、Spring Boot 3.2、Maven、JUnit 5
 - Spring AI Alibaba / DashScope（可选）
 - Milvus Java SDK（可选）与 Apache Lucene BM25
+- MySQL、MyBatis-Plus、Flyway 与 Spring AMQP / RabbitMQ（可选后端）
 - 文件型原子 AgentRun checkpoint 与 Execution Ledger（Repository 接口可替换）
 - 原生 HTML/CSS/JavaScript 工作台、SSE
 - GitHub Actions Java 17 CI
 
 ## Architecture Docs
 
+- [MySQL / RabbitMQ Backend](docs/BACKEND_DISTRIBUTED_TASK.md)
 - [Architecture](src/docs/ARCHITECTURE.md)
 - [Hybrid Retrieval](src/docs/HYBRID_RETRIEVAL.md)
 - [Scientific Agent Loop](src/docs/SCIENTIFIC_AGENT_LOOP.md)
@@ -174,7 +232,7 @@ mvn spring-boot:run
 ## Current Boundaries
 
 - 默认与 CI 不调用真实模型、Milvus 或 MATLAB。
-- 文件型 Ledger 面向单实例部署；尚无 JDBC 事务、分布式 lease 或多实例 leader election。
+- Scientific Execution Ledger 仍为单实例文件实现；本次 MySQL 持久化覆盖实验任务，不提供分布式 lease 或多实例 leader election。
 - Lucene 索引为进程内可重建索引；重启后需从权威知识源重新 ingest。
 - 普通 Replay/Eval 的运行态仍主要在内存；本轮持久化重点是 Scientific Agent 的核心执行恢复链路。
 - 已完成 Ledger 只有在 Artifact path、size、SHA-256 和 validated 标记全部通过时才复用；无法确认的副作用保持 `UNCERTAIN`，不会被当成成功。

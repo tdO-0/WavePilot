@@ -1,0 +1,86 @@
+# Local teaching/demo deployment. All passwords below are development examples.
+x-backend: &backend
+  image: wavepilot-backend:local
+  build:
+    context: .
+    target: ${BACKEND_BUILD_TARGET:-runtime}
+  restart: unless-stopped
+  environment: &backend-env
+    WAVEPILOT_JOB_REPOSITORY: mysql
+    WAVEPILOT_MYSQL_URL: jdbc:mysql://mysql:3306/wavepilot?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true
+    WAVEPILOT_MYSQL_USER: wavepilot
+    WAVEPILOT_MYSQL_PASSWORD: ${BACKEND_MYSQL_PASSWORD:-wavepilot-dev-only}
+    WAVEPILOT_RABBIT_HOST: rabbitmq-management
+    WAVEPILOT_RABBIT_USER: wavepilot
+    WAVEPILOT_RABBIT_PASSWORD: ${BACKEND_RABBIT_PASSWORD:-wavepilot-dev-only}
+    WAVEPILOT_RUNNER_TYPE: mock
+    WAVEPILOT_KNOWLEDGE_REPOSITORY: memory
+    WAVEPILOT_EMBEDDING_OFFLINE: "true"
+    WAVEPILOT_ARTIFACT_ROOT: /app/artifacts
+    WAVEPILOT_SHARED_ARTIFACT_METADATA: "true"
+    DASHSCOPE_API_KEY: not-configured
+  volumes:
+    - backend-artifacts:/app/artifacts
+  depends_on:
+    mysql:
+      condition: service_healthy
+    rabbitmq-management:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://localhost:9900/actuator/health"]
+    interval: 10s
+    timeout: 5s
+    retries: 12
+    start_period: 120s
+
+services:
+  mysql:
+    image: mysql:8.0.36
+    environment:
+      MYSQL_DATABASE: wavepilot
+      MYSQL_USER: wavepilot
+      MYSQL_PASSWORD: ${BACKEND_MYSQL_PASSWORD:-wavepilot-dev-only}
+      MYSQL_ROOT_PASSWORD: ${BACKEND_MYSQL_ROOT_PASSWORD:-wavepilot-root-dev-only}
+    ports: ["127.0.0.1:${BACKEND_MYSQL_PORT:-3306}:3306"]
+    volumes: ["backend-mysql:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_PASSWORD mysql -h 127.0.0.1 -u wavepilot wavepilot -e 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+  rabbitmq-management:
+    image: rabbitmq:3.13-management
+    environment:
+      RABBITMQ_DEFAULT_USER: wavepilot
+      RABBITMQ_DEFAULT_PASS: ${BACKEND_RABBIT_PASSWORD:-wavepilot-dev-only}
+    ports:
+      - "127.0.0.1:${BACKEND_RABBIT_PORT:-5672}:5672"
+      - "127.0.0.1:${BACKEND_RABBIT_MANAGEMENT_PORT:-15672}:15672"
+    volumes: ["backend-rabbit:/var/lib/rabbitmq"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  wavepilot-api:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      WAVEPILOT_NODE_ROLE: api
+    ports: ["127.0.0.1:${BACKEND_API_PORT:-9900}:9900"]
+    volumes:
+      - backend-artifacts:/app/artifacts
+      - backend-api-data:/app/data
+  wavepilot-worker:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      WAVEPILOT_NODE_ROLE: worker
+    # No public HTTP port; the internal HTTP listener serves health checks only for this workflow.
+
+volumes:
+  backend-mysql:
+  backend-rabbit:
+  backend-artifacts:
+  backend-api-data:

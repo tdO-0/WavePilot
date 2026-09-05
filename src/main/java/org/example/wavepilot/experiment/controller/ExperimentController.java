@@ -25,6 +25,7 @@ import java.util.NoSuchElementException;
 import java.util.concurrent.CompletableFuture;
 
 @RestController
+@org.springframework.boot.autoconfigure.condition.ConditionalOnExpression("'${wavepilot.node-role:standalone}' != 'worker'")
 @RequestMapping("/api/experiments")
 @ConditionalOnProperty(prefix = "wavepilot", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class ExperimentController {
@@ -43,8 +44,10 @@ public class ExperimentController {
     }
 
     @PostMapping
-    public ResponseEntity<ExperimentJob> create(@RequestBody ExperimentSpec spec) {
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(experimentService.create(spec));
+    public ResponseEntity<ExperimentJob> create(@RequestBody ExperimentSpec spec,
+            @org.springframework.web.bind.annotation.RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(key == null
+                ? experimentService.create(spec) : experimentService.create(spec, key));
     }
 
     @GetMapping

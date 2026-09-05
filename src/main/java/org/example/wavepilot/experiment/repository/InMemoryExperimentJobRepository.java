@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentMap;
 
 /** Default (hermetic) repository; the file-backed one replaces it when persistence is on. */
 @Repository
-@ConditionalOnProperty(prefix = "wavepilot", name = "jobs.persistence", havingValue = "in-memory", matchIfMissing = true)
+@org.springframework.boot.autoconfigure.condition.ConditionalOnExpression("'${wavepilot.job-repository:${wavepilot.jobs.persistence:in-memory}}' == 'in-memory'")
 public class InMemoryExperimentJobRepository implements ExperimentJobRepository {
 
     private final ConcurrentMap<String, ExperimentJob> jobs = new ConcurrentHashMap<>();

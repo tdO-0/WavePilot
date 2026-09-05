@@ -28,7 +28,7 @@ import java.util.stream.Stream;
  * remains the single source of truth at runtime; every {@code save} writes the snapshot.
  */
 @Repository
-@ConditionalOnProperty(prefix = "wavepilot", name = "jobs.persistence", havingValue = "file")
+@org.springframework.boot.autoconfigure.condition.ConditionalOnExpression("'${wavepilot.job-repository:${wavepilot.jobs.persistence:in-memory}}' == 'file'")
 public class FileSystemExperimentJobRepository implements ExperimentJobRepository {
 
     private final ConcurrentMap<String, ExperimentJob> jobs = new ConcurrentHashMap<>();
@@ -90,17 +90,24 @@ public class FileSystemExperimentJobRepository implements ExperimentJobRepositor
     private record Snapshot(String jobId, ExperimentSpec spec, ExperimentPlan plan,
                             Instant createdAt, Instant updatedAt, ExperimentStatus status,
                             ExperimentProgress progress, String externalJobId,
-                            String sourceJobId, String failureReason) {
+                            String sourceJobId, String failureReason,
+                            org.example.wavepilot.experiment.model.GenericExperimentSpec genericSpec,
+                            String idempotencyKey) {
 
         static Snapshot from(ExperimentJob job) {
             return new Snapshot(job.getJobId(), job.getSpec(), job.getPlan(), job.getCreatedAt(),
                     job.getUpdatedAt(), job.getStatus(), job.getProgress(), job.getExternalJobId(),
-                    job.getSourceJobId(), job.getFailureReason());
+                    job.getSourceJobId(), job.getFailureReason(), job.getGenericSpec(), job.getIdempotencyKey());
         }
 
         ExperimentJob toJob() {
-            return new ExperimentJob(jobId, spec, plan, createdAt, updatedAt, status, progress,
-                    externalJobId, sourceJobId, failureReason);
+            ExperimentJob job = genericSpec == null
+                    ? new ExperimentJob(jobId, spec, plan, createdAt, updatedAt, status, progress,
+                        externalJobId, sourceJobId, failureReason)
+                    : new ExperimentJob(jobId, genericSpec, plan, createdAt, updatedAt, status, progress,
+                        externalJobId, sourceJobId, failureReason);
+            job.setIdempotencyKey(idempotencyKey);
+            return job;
         }
     }
 }
