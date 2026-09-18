@@ -146,8 +146,8 @@ class BackendDistributedIT {
         var right = second.findById(job.getJobId()).orElseThrow();
         var pool = Executors.newFixedThreadPool(2); var gate = new CountDownLatch(1);
         try {
-            var a = pool.submit(() -> { gate.await(); return first.tryClaim(left); });
-            var b = pool.submit(() -> { gate.await(); return second.tryClaim(right); });
+            var a = pool.submit(() -> { gate.await(); return first.tryClaim(left, "IT-WORKER-A"); });
+            var b = pool.submit(() -> { gate.await(); return second.tryClaim(right, "IT-WORKER-B"); });
             gate.countDown();
             assertEquals(1, (a.get() ? 1 : 0) + (b.get() ? 1 : 0));
             assertEquals("RUNNING", jdbc.queryForObject("SELECT status FROM experiment_job WHERE job_id=?", String.class, job.getJobId()));
@@ -171,7 +171,8 @@ class BackendDistributedIT {
         ExperimentService failing = mock(ExperimentService.class);
         when(failing.executeQueued("JOB-RETRY-EXHAUSTED")).thenThrow(new TransientDataAccessResourceException("injected DB outage"));
         when(failing.executeQueued("JOB-RETRY-RECOVERED")).thenThrow(new TransientDataAccessResourceException("once")).thenReturn(true);
-        ExperimentExecutionConsumer consumer = new ExperimentExecutionConsumer(failing, json);
+        ExperimentExecutionConsumer consumer = new ExperimentExecutionConsumer(failing, json,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
         var listener = new SimpleMessageListenerContainer(api.getBean(ConnectionFactory.class));
         listener.setQueueNames(queue); listener.setAcknowledgeMode(AcknowledgeMode.MANUAL);
         listener.setDefaultRequeueRejected(false); listener.setPrefetchCount(1);

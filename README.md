@@ -121,8 +121,8 @@ mvn -B "-Dtest=AgentRegressionEvaluationTest,ScientificAgentLoopTest,ExecutionLe
 
 | 验证项目 | 已验证结果 |
 |---|---:|
-| Maven 默认测试 | 408 项通过，0 失败、0 错误、0 跳过 |
-| MySQL / RabbitMQ 集成测试（`backend-it`） | 6 项通过；真实基础设施，离线模拟执行器 |
+| Maven 默认测试 | 441 项通过，0 失败、0 错误、0 跳过 |
+| MySQL / RabbitMQ 集成测试（`backend-it`） | 16 项通过；真实基础设施，离线模拟执行器 |
 | 检索查询 | 80 条，每类 20 条 |
 | 检索策略数 / 评测结果数 | 5 / 400 |
 | 智能体回归评测 | 基线与候选方案均通过 17/17 个维度 |
@@ -182,13 +182,13 @@ mvn spring-boot:run
 
 ## 可选 MySQL 与 RabbitMQ 后端
 
-默认使用本地执行与内存仓储；文件模式设 `WAVEPILOT_JOB_REPOSITORY=file`。可选后端使用 MySQL、MyBatis-Plus、Flyway 与 Spring AMQP，支持数据库幂等提交、条件更新抢占、手动确认、有限重试和死信。现有 GET/SSE 接口从仓储读取最新进度。
+默认使用本地执行与内存仓储；文件模式设 `WAVEPILOT_JOB_REPOSITORY=file`。可选后端使用 MySQL、MyBatis-Plus、Flyway 与 Spring AMQP，支持数据库幂等提交、事务 Outbox、条件更新抢占、Worker 租约与 fencing token、手动确认、有限重试和死信。现有 GET/SSE 接口从仓储读取最新进度。
 
 | 运行角色 | 职责 | 执行方式 |
 |---|---|---|
 | `standalone`（单机） | 接收请求并执行实验 | 原有本地线程池 |
-| `api`（接口） | 保存任务、发布消息、提供查询与 SSE | 不直接执行实验 |
-| `worker`（执行） | 消费消息、抢占任务、调用执行器 | 可启动多个进程，数据库协调抢占 |
+| `api`（接口） | 保存任务、事务 Outbox 入队、Relay 发布消息、提供查询与 SSE、租约扫描 | 不直接执行实验 |
+| `worker`（执行） | 消费消息、抢占任务、心跳续租、调用执行器 | 可启动多个进程，数据库协调抢占 |
 
 ```powershell
 docker compose -f docker-compose.backend.yml up -d --build
@@ -199,7 +199,24 @@ mvn -B clean test
 mvn -B -Pbackend-it verify
 ```
 
-同一个 Jar 可分别启动接口进程和执行进程；两者需要相同的 MySQL/RabbitMQ 配置，并共享结果文件目录：
+### 事务 Outbox：提交与发布解耦
+
+任务进入 `QUEUED` 与 `outbox_event` 事件写入在**同一个本地数据库事务**中提交；API 返回 202 只代表“已持久化接受”，不再依赖请求线程内的 RabbitMQ 确认。API 节点上的 Outbox Relay 定期认领待发送事件（条件更新抢占，多 API 实例安全），继续使用 Publisher Confirm 与 Return 检查，成功标记 `SENT`，失败按有上限的指数退避（默认 1s 基数、300s 封顶）重试；服务重启后未发送事件自动续传。投递仍是**至少一次**：重复投递由消费者的数据库状态与幂等抢占抑制，不声明 Exactly Once。
+
+### Worker 租约与安全恢复
+
+Worker 通过单条条件更新抢占任务：绑定 `worker_id`、设置 `lease_until`、递增 `attempt` 与 `fencing_token`。执行期间每 200ms 的进度写回与独立心跳调度器持续续租；**所有进度与终态写入都必须同时匹配当前状态、`worker_id`、`fencing_token` 与 `version`**，旧 Worker 恢复运行后无法覆盖新 Worker 或人工处理的状态。过期租约由扫描器保守分类：未提交外部执行且无副作用的 runner（默认 mock）安全重排队并自动补发消息；已提交外部执行器但无法确认结果的一律标记 `UNCERTAIN` 待人工核查，绝不盲目重跑；`VALIDATING_RESULT` 且全部 Artifact 已验证（SHA-256 复验）的按既有证据重建 `SUCCEEDED`，不重复执行。
+
+### Prometheus 可观测性
+
+所有指标使用 `wavepilot_` 前缀，暴露于 `/actuator/prometheus`；指标不使用 jobId/userId 等高基数标签。可选监控栈（不影响默认测试，Compose profile `monitoring`）：
+
+```powershell
+docker compose -f docker-compose.backend.yml --profile monitoring up -d
+# Prometheus: http://localhost:9090  Grafana: http://localhost:3000（匿名管理员）
+```
+
+指标含义见 [后端任务说明](docs/BACKEND_DISTRIBUTED_TASK.md#可观测性)。同一 Jar 可分别启动接口进程和执行进程；两者需要相同的 MySQL/RabbitMQ 配置，并共享结果文件目录：
 
 ```powershell
 $env:WAVEPILOT_JOB_REPOSITORY = "mysql"
@@ -223,9 +240,9 @@ Invoke-RestMethod "http://localhost:9900/api/experiments/$($a.jobId)"
 curl.exe -N "http://localhost:9900/api/experiments/$($a.jobId)/stream"
 ```
 
-连接变量为 `WAVEPILOT_MYSQL_URL/USER/PASSWORD`、`WAVEPILOT_RABBIT_HOST/PORT/USER/PASSWORD`；共享文件根目录为 `WAVEPILOT_ARTIFACT_ROOT`。Compose 默认使用模拟执行器与开发示例密码，接口端口为 9900，RabbitMQ 管理台端口为 15672。完整环境变量、表结构和重试语义见 [后端任务说明](docs/BACKEND_DISTRIBUTED_TASK.md)。
+连接变量为 `WAVEPILOT_MYSQL_URL/USER/PASSWORD`、`WAVEPILOT_RABBIT_HOST/PORT/USER/PASSWORD`；共享文件根目录为 `WAVEPILOT_ARTIFACT_ROOT`。Compose 默认使用模拟执行器与开发示例密码，接口端口为 9900，RabbitMQ 管理台端口为 15672。完整环境变量、表结构、租约语义和重试语义见 [后端任务说明](docs/BACKEND_DISTRIBUTED_TASK.md)。
 
-这是教学和项目展示级的“至少一次投递 + 幂等消费”。没有 Outbox，数据库提交与消息发布间仍有失败窗口；Worker 抢占后崩溃需要人工核查，不声明 Exactly Once 或生产级高可用。
+这是教学和项目展示级的“事务 Outbox + 至少一次投递 + 幂等消费 + 租约恢复”。投递仍可能出现重复，但不会丢失；已提交外部执行器且无法确认结果的副作用保持 `UNCERTAIN` 人工核查，不声明 Exactly Once 或生产级高可用。
 
 ## 技术栈
 
@@ -256,7 +273,11 @@ curl.exe -N "http://localhost:9900/api/experiments/$($a.jobId)/stream"
 ## 当前边界
 
 - 默认离线测试与持续集成不调用真实模型、Milvus 或 MATLAB。
-- 科研智能体执行账本仍为单实例文件实现；MySQL 持久化覆盖实验任务，不提供分布式租约或多实例主节点选举。
+- 投递语义为“至少一次”：Outbox 只消除“已提交未发送”的丢失窗口，重复投递由数据库幂等抢占抑制，不声明 Exactly Once。
+- Worker 恢复是保守的：只有无外部副作用的 runner（默认 mock）才自动重排队；`local-matlab` 等真实执行器的过期租约一律 `UNCERTAIN` 人工核查。
+- 科研智能体执行账本仍为单实例文件实现；MySQL 持久化覆盖实验任务与 Outbox，不提供分布式锁或多实例主节点选举。
+- Outbox Relay 仅在 api 角色运行；若所有 api 实例停止，重排队事件会保持 PENDING 直到 api 恢复。
+- `standalone` 角色不参与租约扫描与心跳（无 Rabbit 消费者接住重排队任务），其 mysql 模式不提供崩溃自动恢复。
 - Lucene 索引可在进程内重建；重启后需从权威知识源重新导入。
 - 实验回放与评测的运行态仍主要在内存中，不提供多接口实例之间的高可用协调。
 - 已完成账本记录只有在结果路径、文件大小、SHA-256 和验证标记全部检查通过后才复用；无法确认的副作用保持 `UNCERTAIN`，不会被当成成功。
@@ -281,3 +302,10 @@ curl.exe -N "http://localhost:9900/api/experiments/$($a.jobId)/stream"
 
 - 新增 MySQL 持久化、数据库幂等提交，以及 API / Worker 分角色异步执行。
 - 新增手动 ACK、有限重试、死信队列与 Docker Compose 部署；完善跨进程结果查询和实验回放。
+
+### 更新：事务 Outbox、Worker 租约与 Prometheus 可观测性
+
+- 新增事务 Outbox：任务进入可执行状态与 `outbox_event` 同事务提交；API 节点 Relay 条件更新认领、Publisher Confirm、指数退避、重启续传。
+- 新增 Worker 租约：原子抢占绑定 `worker_id`/`lease_until`/`fencing_token`，心跳续租，全部写入四要素校验；过期租约按副作用边界保守分类（安全重排队 / `UNCERTAIN` / 已验证 Artifact 重建）。
+- 新增 Micrometer + Prometheus：`wavepilot_` 前缀任务、Outbox、租约与 RabbitMQ 指标，`/actuator/prometheus` 暴露，Compose 可选 monitoring profile。
+- 数据库新增 `outbox_event` 表与 `experiment_job` 租约列，Flyway V2/V3 按版本顺序升级；新增 Outbox 与租约恢复真实基础设施集成测试。

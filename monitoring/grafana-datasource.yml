@@ -1,0 +1,10 @@
+# Minimal runnable Grafana configuration: one provisioned Prometheus datasource.
+# Dashboards can be added under /etc/grafana/provisioning/dashboards the same way.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

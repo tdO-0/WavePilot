@@ -15,6 +15,13 @@ public final class ExperimentJob {
     private volatile String externalJobId;
     private volatile String sourceJobId;
     private volatile String failureReason;
+    // Distributed execution ownership. Only the claim winner owns these values; every
+    // subsequent write must present worker_id + fencing_token + version or it is rejected.
+    private volatile String workerId;
+    private volatile java.time.Instant leaseUntil;
+    private volatile java.time.Instant heartbeatAt;
+    private volatile int attempt;
+    private volatile long fencingToken;
     private String idempotencyKey;
     private long version;
 
@@ -107,4 +114,21 @@ public final class ExperimentJob {
     public void setExternalJobId(String externalJobId) { this.externalJobId = externalJobId; }
     public void setSourceJobId(String sourceJobId) { this.sourceJobId = sourceJobId; }
     public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
+    public String getWorkerId() { return workerId; }
+    public void setWorkerId(String workerId) { this.workerId = workerId; }
+    public java.time.Instant getLeaseUntil() { return leaseUntil; }
+    public void setLeaseUntil(java.time.Instant leaseUntil) { this.leaseUntil = leaseUntil; }
+    public java.time.Instant getHeartbeatAt() { return heartbeatAt; }
+    public void setHeartbeatAt(java.time.Instant heartbeatAt) { this.heartbeatAt = heartbeatAt; }
+    public int getAttempt() { return attempt; }
+    public void setAttempt(int attempt) { this.attempt = attempt; }
+    public void setUpdatedAt(java.time.Instant updatedAt) { this.updatedAt = updatedAt; }
+    public long getFencingToken() { return fencingToken; }
+    public void setFencingToken(long fencingToken) { this.fencingToken = fencingToken; }
+
+    /** The executing node keeps the lease alive: fresh heartbeat evidence + renewed deadline. */
+    public synchronized void refreshLease(java.time.Instant now, java.time.Duration leaseDuration) {
+        this.heartbeatAt = now;
+        this.leaseUntil = now.plus(leaseDuration);
+    }
 }

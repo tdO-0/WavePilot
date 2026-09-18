@@ -45,7 +45,12 @@ public class MySqlExperimentJobRepository implements ExperimentJobRepository {
 
     @Override
     public ExperimentJob save(ExperimentJob job) {
-        if (mapper.updateVersioned(encode(job)) != 1) {
+        return save(job, job.getStatus());
+    }
+
+    @Override
+    public ExperimentJob save(ExperimentJob job, ExperimentStatus expectedStatus) {
+        if (mapper.updateVersioned(encode(job), expectedStatus.name()) != 1) {
             // Preserve the Repository's save(newJob) contract as well as explicit insertIfAbsent.
             if (job.getVersion() == 0 && findById(job.getJobId()).isEmpty()) return insertIfAbsent(job);
             throw new OptimisticLockingFailureException("Job changed concurrently: " + job.getJobId());
@@ -56,11 +61,36 @@ public class MySqlExperimentJobRepository implements ExperimentJobRepository {
 
     @Override
     public boolean tryClaim(ExperimentJob job) {
+        return tryClaim(job, job.getWorkerId());
+    }
+
+    @Override
+    public boolean tryClaim(ExperimentJob job, String workerId) {
         if (job.getStatus() != ExperimentStatus.QUEUED) return false;
+        job.setWorkerId(workerId);
         job.changeStatus(ExperimentStatus.RUNNING, "Worker claimed job");
         if (mapper.claim(encode(job)) != 1) return false;
+        job.setAttempt(job.getAttempt() + 1);
+        job.setFencingToken(job.getFencingToken() + 1);
         job.setVersion(job.getVersion() + 1);
         return true;
+    }
+
+    @Override
+    public int updateHeartbeat(String jobId, String workerId, long fencingToken,
+                               java.time.Instant heartbeatAt, java.time.Instant leaseUntil) {
+        return mapper.heartbeat(jobId, workerId, fencingToken, heartbeatAt, leaseUntil);
+    }
+
+    @Override
+    public boolean requeue(ExperimentJob job, ExperimentStatus expectedStatus, java.time.Instant now) {
+        job.setUpdatedAt(now); // encode() reads it
+        return mapper.requeue(encode(job), expectedStatus.name()) == 1;
+    }
+
+    @Override
+    public List<ExperimentJob> findExpiredLeases(java.time.Instant now, int limit) {
+        return mapper.selectExpiredLeases(now, limit).stream().map(this::decode).toList();
     }
 
     @Override
@@ -95,6 +125,11 @@ public class MySqlExperimentJobRepository implements ExperimentJobRepository {
             row.externalJobId = job.getExternalJobId();
             row.sourceJobId = job.getSourceJobId();
             row.failureReason = job.getFailureReason();
+            row.workerId = job.getWorkerId();
+            row.leaseUntil = job.getLeaseUntil();
+            row.heartbeatAt = job.getHeartbeatAt();
+            row.attempt = job.getAttempt();
+            row.fencingToken = job.getFencingToken();
             row.version = job.getVersion();
             row.createdAt = job.getCreatedAt();
             row.updatedAt = job.getUpdatedAt();
@@ -117,6 +152,11 @@ public class MySqlExperimentJobRepository implements ExperimentJobRepository {
                         row.externalJobId, row.sourceJobId, row.failureReason);
             job.setIdempotencyKey(row.idempotencyKey);
             job.setVersion(row.version);
+            job.setWorkerId(row.workerId);
+            job.setLeaseUntil(row.leaseUntil);
+            job.setHeartbeatAt(row.heartbeatAt);
+            job.setAttempt(row.attempt);
+            job.setFencingToken(row.fencingToken);
             return job;
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Cannot restore job " + row.jobId, e);

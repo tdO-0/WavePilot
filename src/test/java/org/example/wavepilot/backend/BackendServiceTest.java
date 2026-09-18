@@ -31,7 +31,9 @@ class BackendServiceTest {
 
     private void role(ExperimentService service, String role, ExperimentMessagePublisher publisher) {
         var beans = new StaticListableBeanFactory(Map.of("publisher", publisher));
-        service.configureBackend(role, beans.getBeanProvider(ExperimentMessagePublisher.class));
+        service.configureBackend(role, beans.getBeanProvider(ExperimentMessagePublisher.class),
+                beans.getBeanProvider(org.example.wavepilot.experiment.outbox.OutboxDispatchService.class),
+                beans.getBeanProvider(org.example.wavepilot.experiment.lease.WorkerIdentity.class));
     }
 
     @Test

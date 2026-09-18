@@ -92,12 +92,15 @@ public class FileSystemExperimentJobRepository implements ExperimentJobRepositor
                             ExperimentProgress progress, String externalJobId,
                             String sourceJobId, String failureReason,
                             org.example.wavepilot.experiment.model.GenericExperimentSpec genericSpec,
-                            String idempotencyKey) {
+                            String idempotencyKey, String workerId, Instant leaseUntil,
+                            Instant heartbeatAt, Integer attempt, Long fencingToken) {
 
         static Snapshot from(ExperimentJob job) {
             return new Snapshot(job.getJobId(), job.getSpec(), job.getPlan(), job.getCreatedAt(),
                     job.getUpdatedAt(), job.getStatus(), job.getProgress(), job.getExternalJobId(),
-                    job.getSourceJobId(), job.getFailureReason(), job.getGenericSpec(), job.getIdempotencyKey());
+                    job.getSourceJobId(), job.getFailureReason(), job.getGenericSpec(), job.getIdempotencyKey(),
+                    job.getWorkerId(), job.getLeaseUntil(), job.getHeartbeatAt(),
+                    job.getAttempt(), job.getFencingToken());
         }
 
         ExperimentJob toJob() {
@@ -107,6 +110,12 @@ public class FileSystemExperimentJobRepository implements ExperimentJobRepositor
                     : new ExperimentJob(jobId, genericSpec, plan, createdAt, updatedAt, status, progress,
                         externalJobId, sourceJobId, failureReason);
             job.setIdempotencyKey(idempotencyKey);
+            // Lease fields default to null/0 when restoring pre-lease snapshots.
+            job.setWorkerId(workerId);
+            job.setLeaseUntil(leaseUntil);
+            job.setHeartbeatAt(heartbeatAt);
+            job.setAttempt(attempt == null ? 0 : attempt);
+            job.setFencingToken(fencingToken == null ? 0L : fencingToken);
             return job;
         }
     }

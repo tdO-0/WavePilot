@@ -99,6 +99,10 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.alibaba.cloud.ai</groupId>
             <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
         </dependency>
@@ -194,7 +198,11 @@
                         <artifactId>maven-failsafe-plugin</artifactId>
                         <version>3.1.2</version>
                         <configuration>
-                            <includes><include>**/BackendDistributedIT.java</include></includes>
+                            <includes>
+                                <include>**/BackendDistributedIT.java</include>
+                                <include>**/BackendOutboxIT.java</include>
+                                <include>**/BackendLeaseRecoveryIT.java</include>
+                            </includes>
                         </configuration>
                         <executions>
                             <execution>

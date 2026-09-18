@@ -6,6 +6,17 @@ server:
       enabled: true
       force: true
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      # Explicit common tag: Main excludes parts of the actuator auto-configuration,
+      # so the automatic application-name tag cannot be relied on.
+      application: ${spring.application.name:wavepilot}
+
 file:
   upload:
     path: ./uploads
@@ -26,6 +37,9 @@ milvus:
 
 # Spring AI Alibaba DashScope 配置
 spring:
+  # Appears as the application label in Prometheus metrics.
+  application:
+    name: wavepilot
   datasource:
     url: ${WAVEPILOT_MYSQL_URL:jdbc:mysql://localhost:3306/wavepilot?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true}
     username: ${WAVEPILOT_MYSQL_USER:wavepilot}
@@ -81,6 +95,23 @@ wavepilot:
   artifacts:
     root: "${WAVEPILOT_ARTIFACT_ROOT:artifacts}"
     shared-metadata: ${WAVEPILOT_SHARED_ARTIFACT_METADATA:false}
+  outbox:
+    relay-enabled: ${WAVEPILOT_OUTBOX_RELAY_ENABLED:true}
+    relay-interval-ms: ${WAVEPILOT_OUTBOX_RELAY_INTERVAL_MS:1000}
+    batch-size: ${WAVEPILOT_OUTBOX_BATCH_SIZE:50}
+    claim-lease: ${WAVEPILOT_OUTBOX_CLAIM_LEASE:60s}
+    backoff-base: ${WAVEPILOT_OUTBOX_BACKOFF_BASE:1s}
+    backoff-cap: ${WAVEPILOT_OUTBOX_BACKOFF_CAP:300s}
+  lease:
+    enabled: ${WAVEPILOT_LEASE_ENABLED:true}
+    duration: ${WAVEPILOT_LEASE_DURATION:60s}
+    heartbeat-interval-ms: ${WAVEPILOT_LEASE_HEARTBEAT_INTERVAL_MS:15000}
+    scan-interval-ms: ${WAVEPILOT_LEASE_SCAN_INTERVAL_MS:10000}
+    scan-batch: ${WAVEPILOT_LEASE_SCAN_BATCH:100}
+    scan-grace: ${WAVEPILOT_LEASE_SCAN_GRACE:5s}
+    safe-requeue-runner-types: ${WAVEPILOT_LEASE_SAFE_REQUEUE_RUNNER_TYPES:mock}
+  metrics:
+    status-sync-interval-ms: ${WAVEPILOT_STATUS_SYNC_INTERVAL_MS:30000}
   replay:
     numeric-tolerance: 1.0e-9
   knowledge:

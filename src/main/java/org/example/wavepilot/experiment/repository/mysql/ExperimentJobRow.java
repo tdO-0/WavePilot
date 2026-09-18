@@ -20,6 +20,11 @@ public class ExperimentJobRow {
     public String externalJobId;
     public String sourceJobId;
     public String failureReason;
+    public String workerId;
+    public Instant leaseUntil;
+    public Instant heartbeatAt;
+    public int attempt;
+    public long fencingToken;
     public long version;
     public Instant createdAt;
     public Instant updatedAt;

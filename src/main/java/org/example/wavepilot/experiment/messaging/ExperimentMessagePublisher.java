@@ -11,7 +11,11 @@ public class ExperimentMessagePublisher {
     public ExperimentMessagePublisher(RabbitTemplate rabbit) { this.rabbit = rabbit; }
 
     public void publish(String jobId) {
-        ExperimentExecutionMessage message = ExperimentExecutionMessage.forJob(jobId);
+        publish(ExperimentExecutionMessage.forJob(jobId));
+    }
+
+    /** Blocking publish that waits for the broker confirm and fails on an unroutable return. */
+    public void publish(ExperimentExecutionMessage message) {
         CorrelationData correlation = new CorrelationData(message.messageId());
         rabbit.convertAndSend(BackendRabbitConfiguration.EXCHANGE, BackendRabbitConfiguration.ROUTING_KEY,
                 message, raw -> {
@@ -21,12 +25,12 @@ public class ExperimentMessagePublisher {
                 }, correlation);
         try {
             if (!correlation.getFuture().get(5, TimeUnit.SECONDS).isAck() || correlation.getReturned() != null)
-                throw new IllegalStateException("Broker rejected or returned message for " + jobId);
+                throw new IllegalStateException("Broker rejected or returned message for " + message.jobId());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Publish interrupted for " + jobId, e);
+            throw new IllegalStateException("Publish interrupted for " + message.jobId(), e);
         } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
-            throw new IllegalStateException("Publish confirmation unavailable for " + jobId, e);
+            throw new IllegalStateException("Publish confirmation unavailable for " + message.jobId(), e);
         }
     }
 }

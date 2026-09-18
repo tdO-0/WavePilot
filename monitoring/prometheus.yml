@@ -1,0 +1,16 @@
+# Minimal scrape config for the WavePilot backend compose stack.
+# The api exposes /actuator/prometheus on port 9900; the worker keeps its HTTP
+# listener internal to the compose network and is scraped there directly.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: wavepilot-api
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["wavepilot-api:9900"]
+  - job_name: wavepilot-worker
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["wavepilot-worker:9900"]

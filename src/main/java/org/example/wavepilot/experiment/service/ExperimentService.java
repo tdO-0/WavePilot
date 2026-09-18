@@ -7,6 +7,11 @@ import org.example.wavepilot.artifact.ArtifactRecord;
 import org.example.wavepilot.artifact.ArtifactRegistry;
 import org.example.wavepilot.artifact.ArtifactType;
 import org.example.wavepilot.experiment.ExperimentGridResolver;
+import org.example.wavepilot.experiment.lease.LeaseProperties;
+import org.example.wavepilot.experiment.lease.LeaseMetrics;
+import org.example.wavepilot.experiment.lease.WorkerIdentity;
+import org.example.wavepilot.experiment.metrics.JobExecutionMetrics;
+import org.example.wavepilot.experiment.outbox.OutboxDispatchService;
 import org.example.wavepilot.experiment.model.ExperimentJob;
 import org.example.wavepilot.experiment.model.ExperimentPlan;
 import org.example.wavepilot.experiment.model.ExperimentProgress;
@@ -27,12 +32,16 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.example.wavepilot.experiment.messaging.ExperimentMessagePublisher;
@@ -50,19 +59,32 @@ public class ExperimentService {
     private final org.example.wavepilot.template.TemplateRegistry templateRegistry;
     private final org.example.wavepilot.template.definition.ExperimentDefinitionRegistry definitionRegistry;
     private final ExperimentGridResolver gridResolver;
+    private final JobExecutionMetrics jobMetrics;
+    private final LeaseMetrics leaseMetrics;
+    private final LeaseProperties leaseProperties;
+    /** Jobs owned by this node (claim won, not yet terminal): heartbeat + execution timer. */
+    private final ConcurrentMap<String, LeaseHolder> ownedLeases = new ConcurrentHashMap<>();
     private final ExecutorService orchestrationExecutor = Executors.newFixedThreadPool(4);
     private String nodeRole = "standalone";
     private ExperimentMessagePublisher publisher;
+    private WorkerIdentity workerIdentity;
+    // Present only with the MySQL backend: the transactional outbox replaces the
+    // request-thread publish so 202 means "durably accepted", not "broker confirmed".
+    private OutboxDispatchService outboxDispatch;
 
     @Autowired
     public void configureBackend(
             @org.springframework.beans.factory.annotation.Value("${wavepilot.node-role:standalone}") String role,
-            org.springframework.beans.factory.ObjectProvider<ExperimentMessagePublisher> publishers) {
+            org.springframework.beans.factory.ObjectProvider<ExperimentMessagePublisher> publishers,
+            org.springframework.beans.factory.ObjectProvider<OutboxDispatchService> outboxDispatchers,
+            org.springframework.beans.factory.ObjectProvider<WorkerIdentity> workerIdentities) {
         if (!List.of("standalone", "api", "worker").contains(role)) {
             throw new IllegalArgumentException("Unknown wavepilot.node-role: " + role);
         }
         this.nodeRole = role;
         this.publisher = publishers.getIfAvailable();
+        this.outboxDispatch = outboxDispatchers.getIfAvailable();
+        this.workerIdentity = workerIdentities.getIfAvailable();
         if (!"standalone".equals(role) && publisher == null) {
             throw new IllegalStateException("api/worker require the MySQL + RabbitMQ backend configuration");
         }
@@ -73,7 +95,9 @@ public class ExperimentService {
                              ArtifactRegistry artifactRegistry, ResultValidator resultValidator,
                              ObjectMapper objectMapper) {
         this(specValidator, stateMachine, repository, runner, artifactRegistry, resultValidator,
-                objectMapper, null, null);
+                objectMapper, null, null, new JobExecutionMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                new LeaseMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                new LeaseProperties(true, Duration.ofSeconds(60), 100, Duration.ofSeconds(5), List.of("mock")));
     }
 
     public ExperimentService(ExperimentSpecValidator specValidator, ExperimentStateMachine stateMachine,
@@ -82,7 +106,23 @@ public class ExperimentService {
                              ObjectMapper objectMapper,
                              org.example.wavepilot.template.TemplateRegistry templateRegistry) {
         this(specValidator, stateMachine, repository, runner, artifactRegistry, resultValidator,
-                objectMapper, templateRegistry, null);
+                objectMapper, templateRegistry, null, new JobExecutionMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                new LeaseMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                new LeaseProperties(true, Duration.ofSeconds(60), 100, Duration.ofSeconds(5), List.of("mock")));
+    }
+
+    /** Compatibility constructor for manual wiring in tests: isolated metrics + defaults. */
+    public ExperimentService(ExperimentSpecValidator specValidator, ExperimentStateMachine stateMachine,
+                             ExperimentJobRepository repository, ExperimentRunner runner,
+                             ArtifactRegistry artifactRegistry, ResultValidator resultValidator,
+                             ObjectMapper objectMapper,
+                             org.example.wavepilot.template.TemplateRegistry templateRegistry,
+                             org.example.wavepilot.template.definition.ExperimentDefinitionRegistry definitionRegistry) {
+        this(specValidator, stateMachine, repository, runner, artifactRegistry, resultValidator, objectMapper,
+                templateRegistry, definitionRegistry,
+                new JobExecutionMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                new LeaseMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                new LeaseProperties(true, Duration.ofSeconds(60), 100, Duration.ofSeconds(5), List.of("mock")));
     }
 
     @Autowired
@@ -91,7 +131,9 @@ public class ExperimentService {
                              ArtifactRegistry artifactRegistry, ResultValidator resultValidator,
                              ObjectMapper objectMapper,
                              org.example.wavepilot.template.TemplateRegistry templateRegistry,
-                             org.example.wavepilot.template.definition.ExperimentDefinitionRegistry definitionRegistry) {
+                             org.example.wavepilot.template.definition.ExperimentDefinitionRegistry definitionRegistry,
+                             JobExecutionMetrics jobMetrics, LeaseMetrics leaseMetrics,
+                             LeaseProperties leaseProperties) {
         this.specValidator = specValidator;
         this.stateMachine = stateMachine;
         this.repository = repository;
@@ -102,6 +144,9 @@ public class ExperimentService {
         this.templateRegistry = templateRegistry;
         this.definitionRegistry = definitionRegistry;
         this.gridResolver = new ExperimentGridResolver();
+        this.jobMetrics = jobMetrics;
+        this.leaseMetrics = leaseMetrics;
+        this.leaseProperties = leaseProperties;
     }
 
     public ValidationResult parseAndValidate(ExperimentSpec spec) {
@@ -138,11 +183,12 @@ public class ExperimentService {
         candidate.setIdempotencyKey(key);
         ExperimentJob job = repository.insertIfAbsent(candidate);
         if (!job.getJobId().equals(jobId)) return redispatchIfQueued(job);
+        jobMetrics.jobCreated(); // fresh insert: CREATED, version still 0
         transitionAndPersist(job, ExperimentStatus.VALIDATED, "ExperimentSpec validated by Java");
         try {
             artifactRegistry.writeJson(jobId, ArtifactType.EXPERIMENT_SPEC, "experiment-spec.json", spec);
             artifactRegistry.writeJson(jobId, ArtifactType.EXPERIMENT_PLAN, "experiment-plan.json", plan);
-            transitionAndPersist(job, ExperimentStatus.QUEUED, "Experiment queued for controlled runner");
+            transitionToQueued(job, "Experiment queued for controlled runner");
         } catch (RuntimeException e) {
             fail(job, "Could not initialize experiment artifacts: " + e.getMessage());
             throw e;
@@ -157,13 +203,22 @@ public class ExperimentService {
     }
 
     private ExperimentJob redispatchIfQueued(ExperimentJob job) {
-        // Allows the client to recover a failed publish with the same key; DB claim tolerates duplicates.
-        if ("api".equals(nodeRole) && job.getStatus() == ExperimentStatus.QUEUED) dispatch(job);
+        // Allows the client to recover a failed dispatch with the same key; DB claim tolerates duplicates.
+        if ("api".equals(nodeRole) && job.getStatus() == ExperimentStatus.QUEUED) {
+            if (outboxDispatch != null) outboxDispatch.ensureQueuedEvent(job); // idempotent journal append
+            else dispatch(job); // non-MySQL fallback: publish synchronously
+        }
         return job;
     }
 
+    /**
+     * With the MySQL backend the api role commits the QUEUED transition and the outbox
+     * event in one transaction and returns; the relay publishes asynchronously. The
+     * synchronous publish below only survives for non-MySQL test/dev setups.
+     */
     private void dispatch(ExperimentJob job) {
         if ("api".equals(nodeRole)) {
+            if (outboxDispatch != null) return; // the relay owns publishing now
             try {
                 publisher.publish(job.getJobId());
             } catch (RuntimeException e) {
@@ -180,7 +235,19 @@ public class ExperimentService {
         ExperimentJob job = get(jobId);
         if (job.getStatus() == ExperimentStatus.CREATED || job.getStatus() == ExperimentStatus.VALIDATED)
             throw new org.springframework.dao.TransientDataAccessResourceException("Job is not queued yet");
-        if (job.getStatus() != ExperimentStatus.QUEUED || !repository.tryClaim(job)) return false;
+        if (job.getStatus() != ExperimentStatus.QUEUED) return false;
+        // Bind this node's identity and lease window BEFORE the conditional claim so the
+        // SQL can persist them atomically; the winner's fencing token fends off zombies.
+        Instant claimedAt = Instant.now();
+        job.setWorkerId(workerId());
+        job.refreshLease(claimedAt, leaseProperties.duration());
+        if (!repository.tryClaim(job, job.getWorkerId())) {
+            leaseMetrics.claimLost();
+            return false;
+        }
+        leaseMetrics.claimWon();
+        jobMetrics.recordQueueTime(Duration.between(job.getCreatedAt(), claimedAt));
+        ownedLeases.put(jobId, new LeaseHolder(job, claimedAt));
         try {
             execute(job);
             if (job.getStatus() == ExperimentStatus.FAILED)
@@ -190,6 +257,17 @@ public class ExperimentService {
             // Never retry Runner submission after the claim: side effects may already exist.
             throw new IllegalStateException("Claimed execution failed; inspect job " + jobId, e);
         }
+    }
+
+    /** Stable node identity for claims; api never claims, its fallback id is cosmetic. */
+    private String workerId() {
+        if (workerIdentity != null) return workerIdentity.workerId();
+        return "NODE-" + UUID.randomUUID().toString().substring(0, 12).toUpperCase();
+    }
+
+    /** The node's currently owned jobs, for the heartbeat scheduler. */
+    public java.util.Collection<ExperimentJob> activeLeasedJobs() {
+        return ownedLeases.values().stream().map(LeaseHolder::job).toList();
     }
 
     public ExperimentJob get(String jobId) {
@@ -241,11 +319,12 @@ public class ExperimentService {
         String jobId = "JOB-" + UUID.randomUUID().toString().substring(0, 12).toUpperCase();
         ExperimentPlan plan = previewPlan(spec);
         ExperimentJob job = repository.insertIfAbsent(new ExperimentJob(jobId, spec, plan));
+        jobMetrics.jobCreated(); // fresh insert: CREATED, version still 0
         transitionAndPersist(job, ExperimentStatus.VALIDATED, "Generic spec validated against template definition");
         try {
             artifactRegistry.writeJson(jobId, ArtifactType.EXPERIMENT_SPEC, "experiment-spec.json", spec);
             artifactRegistry.writeJson(jobId, ArtifactType.EXPERIMENT_PLAN, "experiment-plan.json", plan);
-            transitionAndPersist(job, ExperimentStatus.QUEUED, "Experiment queued for controlled runner");
+            transitionToQueued(job, "Experiment queued for controlled runner");
         } catch (RuntimeException e) {
             fail(job, "Could not initialize experiment artifacts: " + e.getMessage());
             throw e;
@@ -360,6 +439,7 @@ public class ExperimentService {
                 if (status.state() == RunnerStatus.State.QUEUED || status.state() == RunnerStatus.State.RUNNING) {
                     job.updateProgress(status.progress(), status.state().name(), status.completedRuns(),
                             status.totalRuns(), status.message());
+                    if (job.getWorkerId() != null) job.refreshLease(Instant.now(), leaseProperties.duration());
                     repository.save(job);
                     Thread.sleep("standalone".equals(nodeRole) ? 20 : 200);
                     continue;
@@ -396,9 +476,24 @@ public class ExperimentService {
                 return;
             }
         } catch (org.springframework.dao.OptimisticLockingFailureException e) {
-            // A cancellation won the database race; never overwrite it with stale progress.
-            if (get(job.getJobId()).getStatus() == ExperimentStatus.CANCELLED) {
+            // A cancellation or a recovery transition won the database race; never overwrite
+            // it with stale progress. Stop our Runner only when this node still owns the job.
+            ExperimentJob current = get(job.getJobId());
+            if (current.getStatus() == ExperimentStatus.CANCELLED) {
                 if (job.getExternalJobId() != null) runner.cancel(job.getExternalJobId());
+                return;
+            }
+            boolean lostOwnership = current.getStatus() == ExperimentStatus.QUEUED // re-queued by recovery
+                    || current.getStatus() == ExperimentStatus.UNCERTAIN
+                    || !Objects.equals(current.getWorkerId(), job.getWorkerId())
+                    || current.getFencingToken() != job.getFencingToken();
+            if (lostOwnership) {
+                // Re-queued (side-effect-free runner only): stop the orphaned run.
+                // UNCERTAIN: leave the external process alone — its outputs may still be
+                // inspected by a human, and any write we make is fenced anyway.
+                if (current.getStatus() == ExperimentStatus.QUEUED && job.getExternalJobId() != null) {
+                    runner.cancel(job.getExternalJobId());
+                }
                 return;
             }
             throw e;
@@ -457,18 +552,58 @@ public class ExperimentService {
                 algorithmValidated, classification, job.getPlan().experimentTemplateVersion(), algorithmVersion);
     }
 
-    /** 状态变更后立即写回仓储：file 仓储落盘快照，重启后可恢复历史状态。 */
+    /**
+     * 状态变更后立即写回仓储：file 仓储落盘快照，重启后可恢复历史状态。
+     * The captured source status is pinned into the conditional UPDATE so a stale writer
+     * can never overwrite a state that changed underneath it.
+     */
     private void transitionAndPersist(ExperimentJob job, ExperimentStatus status, String message) {
+        ExperimentStatus from = job.getStatus();
         stateMachine.transition(job, status, message);
-        repository.save(job);
+        repository.save(job, from);
+        jobMetrics.statusChanged(from, status);
+        if (status.isTerminal()) recordExecutionTimeIfOwned(job.getJobId());
+    }
+
+    private void recordExecutionTimeIfOwned(String jobId) {
+        LeaseHolder holder = ownedLeases.remove(jobId);
+        if (holder != null) jobMetrics.recordExecutionTime(Duration.between(holder.claimStart(), Instant.now()));
+    }
+
+    /** Heartbeat and execution-timer state for a job this node won and still owns. */
+    public record LeaseHolder(ExperimentJob job, Instant claimStart) { }
+
+    /**
+     * api + MySQL: the QUEUED transition and its outbox event must commit atomically, so
+     * the request thread never depends on a broker confirm. All other setups keep the
+     * plain transition (standalone executes in-process; non-MySQL api publishes directly).
+     */
+    private void transitionToQueued(ExperimentJob job, String message) {
+        if ("api".equals(nodeRole) && outboxDispatch != null) {
+            stateMachine.transition(job, ExperimentStatus.QUEUED, message);
+            outboxDispatch.enqueueQueued(job, ExperimentStatus.VALIDATED);
+        } else {
+            transitionAndPersist(job, ExperimentStatus.QUEUED, message);
+        }
     }
 
     private void fail(ExperimentJob job, String reason) {
         synchronized (job) {
             if (job.getStatus().isTerminal()) return;
             job.setFailureReason(reason);
-            if (stateMachine.canTransition(job.getStatus(), ExperimentStatus.FAILED)) {
+            if (!stateMachine.canTransition(job.getStatus(), ExperimentStatus.FAILED)) return;
+            try {
                 transitionAndPersist(job, ExperimentStatus.FAILED, reason);
+            } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+                // A previous write in this flow may have failed after mutating the in-memory
+                // object (or been rolled back), so the pinned source status no longer matches
+                // the row. Align with the database once and retry; the caller rethrows its
+                // original error either way.
+                ExperimentJob current = repository.findById(job.getJobId()).orElse(null);
+                if (current != null && stateMachine.canTransition(current.getStatus(), ExperimentStatus.FAILED)) {
+                    current.setFailureReason(reason);
+                    transitionAndPersist(current, ExperimentStatus.FAILED, reason);
+                }
             }
         }
     }

@@ -22,12 +22,13 @@ public class ExperimentStateMachine {
         transitions.put(ExperimentStatus.QUEUED, EnumSet.of(ExperimentStatus.RUNNING,
                 ExperimentStatus.FAILED, ExperimentStatus.CANCELLED));
         transitions.put(ExperimentStatus.RUNNING, EnumSet.of(ExperimentStatus.VALIDATING_RESULT,
-                ExperimentStatus.FAILED, ExperimentStatus.CANCELLED));
+                ExperimentStatus.FAILED, ExperimentStatus.CANCELLED, ExperimentStatus.UNCERTAIN));
         transitions.put(ExperimentStatus.VALIDATING_RESULT, EnumSet.of(ExperimentStatus.SUCCEEDED,
-                ExperimentStatus.FAILED, ExperimentStatus.CANCELLED));
+                ExperimentStatus.FAILED, ExperimentStatus.CANCELLED, ExperimentStatus.UNCERTAIN));
         transitions.put(ExperimentStatus.SUCCEEDED, EnumSet.noneOf(ExperimentStatus.class));
         transitions.put(ExperimentStatus.FAILED, EnumSet.noneOf(ExperimentStatus.class));
         transitions.put(ExperimentStatus.CANCELLED, EnumSet.noneOf(ExperimentStatus.class));
+        transitions.put(ExperimentStatus.UNCERTAIN, EnumSet.noneOf(ExperimentStatus.class));
     }
 
     public void transition(ExperimentJob job, ExperimentStatus next, String message) {

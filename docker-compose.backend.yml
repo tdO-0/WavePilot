@@ -78,6 +78,30 @@ services:
       <<: *backend-env
       WAVEPILOT_NODE_ROLE: worker
     # No public HTTP port; the internal HTTP listener serves health checks only for this workflow.
+    # Prometheus still scrapes it internally at wavepilot-worker:9900.
+
+  # Optional observability stack: start with
+  #   docker compose -f docker-compose.backend.yml --profile monitoring up -d
+  # The default profile is untouched, so plain test/CI runs never start these.
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    profiles: ["monitoring"]
+    ports: ["127.0.0.1:${BACKEND_PROMETHEUS_PORT:-9090}:9090"]
+    volumes: ["./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    depends_on:
+      - wavepilot-api
+  grafana:
+    image: grafana/grafana:11.1.0
+    profiles: ["monitoring"]
+    ports: ["127.0.0.1:${BACKEND_GRAFANA_PORT:-3000}:3000"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ADMIN_PASSWORD: wavepilot-dev-only
+    volumes:
+      - "./monitoring/grafana-datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro"
+    depends_on:
+      - prometheus
 
 volumes:
   backend-mysql:

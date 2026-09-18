@@ -15,7 +15,8 @@ class BackendConsumerTest {
     private final ObjectMapper json = new ObjectMapper().findAndRegisterModules();
     private final ExperimentService service = mock(ExperimentService.class);
     private final Channel channel = mock(Channel.class);
-    private final ExperimentExecutionConsumer consumer = new ExperimentExecutionConsumer(service, json);
+    private final ExperimentExecutionConsumer consumer = new ExperimentExecutionConsumer(service, json,
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
     private Message message() throws Exception {
         var properties = new MessageProperties(); properties.setDeliveryTag(7);

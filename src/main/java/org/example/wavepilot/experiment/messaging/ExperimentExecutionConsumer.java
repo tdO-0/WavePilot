@@ -2,6 +2,8 @@ package org.example.wavepilot.experiment.messaging;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rabbitmq.client.Channel;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.example.wavepilot.experiment.service.ExperimentService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,10 +21,19 @@ public class ExperimentExecutionConsumer {
     private static final Logger log = LoggerFactory.getLogger(ExperimentExecutionConsumer.class);
     private final ExperimentService service;
     private final ObjectMapper json;
+    private final Counter consumed;
+    private final Counter duplicates;
+    private final Counter deadLettered;
 
-    public ExperimentExecutionConsumer(ExperimentService service, ObjectMapper json) {
+    public ExperimentExecutionConsumer(ExperimentService service, ObjectMapper json, MeterRegistry registry) {
         this.service = service;
         this.json = json;
+        this.consumed = Counter.builder("wavepilot.rabbitmq.consumed")
+                .description("Experiment deliveries completed (executed or duplicate-acked)").register(registry);
+        this.duplicates = Counter.builder("wavepilot.rabbitmq.duplicates")
+                .description("Deliveries acknowledged because the DB claim already moved on").register(registry);
+        this.deadLettered = Counter.builder("wavepilot.rabbitmq.dlq")
+                .description("Deliveries rejected without requeue into the dead-letter queue").register(registry);
     }
 
     @RabbitListener(queues = BackendRabbitConfiguration.QUEUE, containerFactory = "backendListenerFactory")
@@ -37,6 +48,7 @@ public class ExperimentExecutionConsumer {
         } catch (Exception invalid) {
             log.warn("Rejecting invalid experiment message", invalid);
             channel.basicReject(tag, false);
+            deadLettered.increment();
             return;
         }
         // At-least-once delivery + idempotent DB claim. Initial attempt + at most 3 retries.
@@ -46,6 +58,7 @@ public class ExperimentExecutionConsumer {
                 boolean executed = service.executeQueued(message.jobId());
                 log.info("Execution {} job {}: {}", message.executionId(), message.jobId(),
                         executed ? "completed" : "duplicate acknowledged");
+                if (executed) consumed.increment(); else duplicates.increment();
             } catch (TransientDataAccessException | DataAccessResourceFailureException temporary) {
                 if (attempt < 3) {
                     log.warn("Temporary failure job {}, retry {}/3", message.jobId(), attempt + 1);
@@ -54,17 +67,20 @@ public class ExperimentExecutionConsumer {
                     } catch (InterruptedException interrupted) {
                         Thread.currentThread().interrupt();
                         channel.basicReject(tag, false);
+                        deadLettered.increment();
                         return;
                     }
                     continue;
                 }
                 log.error("Retries exhausted for {}; rejecting to DLQ", message.jobId(), temporary);
                 channel.basicReject(tag, false);
+                deadLettered.increment();
                 return;
             } catch (RuntimeException permanent) {
                 // Deterministic experiment failures and ambiguous post-claim failures are not rerun.
                 log.error("Execution failed for {}; rejecting to DLQ", message.jobId(), permanent);
                 channel.basicReject(tag, false);
+                deadLettered.increment();
                 return;
             }
             // ACK errors are deliberately outside the retry block: never rerun work because ACK failed.
